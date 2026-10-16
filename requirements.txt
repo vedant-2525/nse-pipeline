@@ -1,0 +1,21 @@
+# Core pipeline dependencies
+requests==2.32.3
+yfinance==0.2.54
+pandas==2.2.3
+pyarrow==18.1.0
+pyspark==3.5.4
+
+# Database and warehouse
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.38
+
+# Configuration & environment management
+pyyaml==6.0.2
+python-dotenv==1.0.1
+
+# Dashboard
+streamlit==1.42.0
+
+# Development, testing, and linting
+pytest==8.3.4
+ruff==0.9.6
