@@ -43,13 +43,9 @@ env/
 htmlcov/
 
 # Pipeline data lake folders (raw, processed, quarantine)
-data/*
-!data/bronze/
-!data/bronze/.gitkeep
-!data/silver/
-!data/silver/.gitkeep
-!data/quarantine/
-!data/quarantine/.gitkeep
+data/**
+!data/**/
+!data/**/.gitkeep
 
 # PySpark / Hadoop / Spark event logs / metastore
 metastore_db/

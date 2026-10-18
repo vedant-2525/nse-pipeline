@@ -151,10 +151,17 @@ Copy-Item .env.example .env
 ## Project Status
 
 - [x] **Phase 0: Scaffold** - Repository structure, config files, CI skeleton, ruff/pytest setup, and ADRs.
-- [ ] **Phase 1: Ingest** - `BhavcopySource` interface, official NSE source with fallback to `yfinance`, retry mechanism.
+- [x] **Phase 1: Ingest** - `BhavcopySource` interface, official NSE source with fallback to `yfinance`, retry mechanism.
 - [ ] **Phase 2: Transform (PySpark)** - Canonical schema mapping, cleaning, date-partitioned Parquet generation.
 - [ ] **Phase 3: Warehouse & Load** - Star schema DDL, idempotent Postgres loader, pipeline run logging.
 - [ ] **Phase 4: Analytics Views** - Moving averages, rolling volatility, top movers, sector returns.
 - [ ] **Phase 5: Data Quality** - Stop-the-line validation gates and ops metadata logging.
 - [ ] **Phase 6: Airflow Orchestration** - Daily scheduled DAG and backfill DAG with holiday skipping.
 - [ ] **Phase 7: Dashboard & Packaging** - Streamlit dashboard, Docker Compose multi-service deployment.
+
+---
+
+## Disclaimer & Terms of Use
+
+This project is created strictly for **educational and portfolio demonstration purposes**. Market data is sourced from public archives of the National Stock Exchange of India (NSE) and Yahoo Finance. All trademarks, logos, and market data belong to their respective owners. Do not use this pipeline for commercial purposes or high-frequency automated scraping in violation of exchange terms of service.
+
