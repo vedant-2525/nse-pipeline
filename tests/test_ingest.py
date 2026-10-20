@@ -237,3 +237,90 @@ def test_downloader_stops_immediately_on_rate_limit(tmp_path: Path):
     assert result.is_file()
     # Verify primary fetch was called only ONCE and did not loop through all 5 retries
     assert mock_primary.fetch.call_count == 1
+
+
+def test_yfinance_fallback_does_not_block_subsequent_nse_fetch(tmp_path: Path):
+    """Verify that a fallback (yfinance) file never blocks a later official NSE fetch without force."""
+    bronze_dir = tmp_path / "bronze"
+    trade_date = date(2024, 10, 11)
+
+    # 1. First run: Fallback (yfinance) ingest produces a fallback file
+    mock_yf = MagicMock(spec=BhavcopySource)
+    mock_yf.source_name = "yfinance_fallback"
+
+    def yf_fetch(dt, output_dir):
+        f = output_dir / f"yfinance_fallback_{dt.strftime('%Y%m%d')}.csv"
+        f.write_text("SYMBOL,CLOSE\nRELIANCE,2500\n", encoding="utf-8")
+        return f
+
+    mock_yf.fetch.side_effect = yf_fetch
+
+    dl_yf = BhavcopyDownloader(
+        output_base_dir=bronze_dir,
+        primary_source=mock_yf,
+        delay_seconds=0.0,
+    )
+    fallback_res = dl_yf.download(trade_date)
+    assert fallback_res.is_file()
+    assert "yfinance_fallback" in fallback_res.name
+
+    # 2. Second run: Official NSE fetch without --force
+    mock_nse = MagicMock(spec=BhavcopySource)
+    mock_nse.source_name = "nse_official"
+
+    def nse_fetch(dt, output_dir):
+        f = output_dir / f"BhavCopy_NSE_CM_0_0_0_{dt.strftime('%Y%m%d')}_F_0000.csv"
+        f.write_text("TradDt,TckrSymb,ClsPric\n2024-10-11,RELIANCE,2510\n", encoding="utf-8")
+        return f
+
+    mock_nse.fetch.side_effect = nse_fetch
+
+    dl_nse = BhavcopyDownloader(
+        output_base_dir=bronze_dir,
+        primary_source=mock_nse,
+        delay_seconds=0.0,
+    )
+    # Without force=True, NSE must STILL fetch because existing file was only a fallback!
+    nse_res = dl_nse.download(trade_date, force=False)
+    assert nse_res.is_file()
+    assert nse_res.name == f"BhavCopy_NSE_CM_0_0_0_{trade_date.strftime('%Y%m%d')}_F_0000.csv"
+    mock_nse.fetch.assert_called_once()
+
+
+def test_download_writes_metadata_json(tmp_path: Path):
+    """Verify metadata JSON is created next to downloaded file with required schema."""
+    bronze_dir = tmp_path / "bronze"
+    trade_date = date(2024, 10, 11)
+
+    mock_source = MagicMock(spec=BhavcopySource)
+    mock_source.source_name = "nse_official"
+
+    def fetch_with_meta(dt, output_dir):
+        f = output_dir / "sample_bhav.csv"
+        f.write_text("SAMPLE CONTENT", encoding="utf-8")
+        return f
+
+    mock_source.fetch.side_effect = fetch_with_meta
+
+    downloader = BhavcopyDownloader(
+        output_base_dir=bronze_dir,
+        primary_source=mock_source,
+        delay_seconds=0.0,
+    )
+    res = downloader.download(trade_date)
+    assert res.is_file()
+
+    meta_file = res.with_name(f"{res.name}.meta.json")
+    assert meta_file.is_file()
+
+    import json
+
+    with open(meta_file, encoding="utf-8") as f:
+        data = json.load(f)
+
+    assert data["source_name"] == "nse_official"
+    assert "url" in data
+    assert "downloaded_at" in data
+    assert data["file_size_bytes"] == len("SAMPLE CONTENT")
+    assert "sha256" in data
+    assert len(data["sha256"]) == 64

@@ -54,3 +54,27 @@ Official NSE market files are published daily post-market (~6:30 PM IST). On Jul
 ### Trade-offs
 - The `yfinance` fallback does not supply ISIN or total trade counts, but preserves price continuity (OHLCV) so downstream analytics are unblocked.
 
+---
+
+## ADR 003: Scope Definition for Auxiliary `sec_bhavdata_full` Files (Phase 1 Refinement)
+
+- **Date:** 2026-10-20
+- **Status:** Accepted
+
+### Context
+During ingestion exploration, an auxiliary NSE reporting file `sec_bhavdata_full_{DDMMYYYY}.csv` was identified. This file focuses primarily on security delivery quantities and delivery percentages (`DELIV_QTY`, `DELIV_PER`), and lacks standard attributes present in official CM Bhavcopies (such as ISIN in earlier years or standardized turnover representations).
+
+### Decision
+1. `sec_bhavdata_full_*.csv` is ruled **out of scope** for the canonical Silver market price schema.
+2. The core pipeline targets official Capital Market (CM) Bhavcopy files:
+   - Modern UDiFF: `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv`
+   - Legacy Bhavcopy: `cmDDMMMYYYYbhav.csv`
+   - yfinance fallback: `yfinance_fallback_YYYYMMDD.csv`
+3. The Silver transformation parser must actively inspect incoming Bronze headers. If `sec_bhavdata_full` or any unrecognized format is passed, it must fail fast with a clear `UnsupportedFormatError` rather than silently misparsing data or producing null columns.
+
+### Alternatives Considered
+- *Creating a widened union schema:* Rejected because delivery metrics are not required by the star-schema warehouse specification, and mixing security delivery logs with standard market trade summaries complicates deduplication and schema consistency.
+
+### Trade-offs
+- Delivery data is not ingested into the Gold layer, but the core pipeline schema remains clean, predictable, and strictly conforming to official CM Bhavcopy standards.
+

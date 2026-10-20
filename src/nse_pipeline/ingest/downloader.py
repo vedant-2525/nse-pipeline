@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from nse_pipeline.ingest.base import BhavcopySource
+from nse_pipeline.ingest.metadata import read_file_metadata, write_file_metadata
 from nse_pipeline.ingest.nse_source import NseSource
 from nse_pipeline.ingest.yfinance_source import YFinanceSource
 from nse_pipeline.utils.calendar import is_trading_day
@@ -46,17 +47,46 @@ class BhavcopyDownloader:
         """Returns Hive-style partition directory path: data/bronze/trade_date=YYYY-MM-DD."""
         return self.output_base_dir / f"trade_date={trade_date.strftime('%Y-%m-%d')}"
 
-    def get_existing_file(self, trade_date: date) -> Path | None:
-        """Returns the path to an already downloaded raw file if present in bronze."""
+    def get_existing_file(
+        self, trade_date: date, required_source: str | None = None
+    ) -> Path | None:
+        """Returns the path to an already downloaded raw file if present in bronze.
+
+        Why this design:
+        A fallback (yfinance) file must never block a subsequent official NSE fetch.
+        When required_source is 'nse_official', only official NSE files (not labeled
+        as fallback) count as an idempotency hit.
+        """
         partition_dir = self._get_partition_dir(trade_date)
         if not partition_dir.is_dir():
             return None
 
         # Look for non-empty CSV files in the partition
-        for file in partition_dir.glob("*.csv"):
-            if file.stat().st_size > 0:
-                return file
-        return None
+        csv_files = [f for f in partition_dir.glob("*.csv") if f.stat().st_size > 0]
+        if not csv_files:
+            return None
+
+        official_files = [
+            f
+            for f in csv_files
+            if not f.name.startswith("yfinance_fallback_") and not f.name.startswith("fallback")
+        ]
+        fallback_files = [
+            f
+            for f in csv_files
+            if f.name.startswith("yfinance_fallback_") or f.name.startswith("fallback")
+        ]
+
+        if required_source == "nse_official":
+            return official_files[0] if official_files else None
+        elif required_source == "yfinance_fallback":
+            return fallback_files[0] if fallback_files else None
+        else:
+            return (
+                official_files[0]
+                if official_files
+                else (fallback_files[0] if fallback_files else None)
+            )
 
     def download(
         self,
@@ -74,12 +104,14 @@ class BhavcopyDownloader:
         Returns:
             Path to the saved raw file in bronze.
         """
-        # 1. Idempotency check: avoid redundant network traffic
+        # 1. Idempotency check: consider which source produced the file
         if not force:
-            existing = self.get_existing_file(trade_date)
+            req_source = self.primary_source.source_name if self.primary_source else None
+            existing = self.get_existing_file(trade_date, required_source=req_source)
             if existing:
                 logger.info(
-                    "Idempotency hit: Raw file already exists in bronze at %s. Skipping download.",
+                    "Idempotency hit: Raw file (%s) already exists in bronze at %s. Skipping download.",
+                    req_source or "any",
                     existing,
                 )
                 return existing
@@ -112,7 +144,14 @@ class BhavcopyDownloader:
                     self.max_retries,
                     trade_date,
                 )
-                return self.primary_source.fetch(trade_date, partition_dir)
+                res_file = self.primary_source.fetch(trade_date, partition_dir)
+                if read_file_metadata(res_file) is None:
+                    write_file_metadata(
+                        res_file,
+                        source_name=self.primary_source.source_name,
+                        url="unknown",
+                    )
+                return res_file
 
             except PermissionError as e:
                 # 403 or 429 received: STOP hitting the server immediately to prevent blacklisting
@@ -143,13 +182,27 @@ class BhavcopyDownloader:
 
         # 5. Try fallback source if primary failed and fallback is enabled
         if use_fallback and self.fallback_source:
-            logger.info(
-                "Primary source (%s) failed; triggering fallback source (%s)...",
+            logger.warning(
+                "\n"
+                "********************************************************************************\n"
+                "[WARNING] PRIMARY SOURCE (%s) FAILED FOR DATE %s: %s\n"
+                "--> FALLING BACK TO SECONDARY SOURCE (%s).\n"
+                "--> Note: Fallback data is best-effort and does not contain all official fields.\n"
+                "********************************************************************************",
                 self.primary_source.source_name,
+                trade_date,
+                primary_error,
                 self.fallback_source.source_name,
             )
             try:
-                return self.fallback_source.fetch(trade_date, partition_dir)
+                fallback_file = self.fallback_source.fetch(trade_date, partition_dir)
+                if read_file_metadata(fallback_file) is None:
+                    write_file_metadata(
+                        fallback_file,
+                        source_name=self.fallback_source.source_name,
+                        url="unknown",
+                    )
+                return fallback_file
             except Exception as fallback_err:
                 logger.error("Fallback source also failed: %s", fallback_err)
                 raise RuntimeError(

@@ -15,6 +15,7 @@ import yaml
 import yfinance as yf
 
 from nse_pipeline.ingest.base import BhavcopySource
+from nse_pipeline.ingest.metadata import write_file_metadata
 from nse_pipeline.utils.logging import logger
 
 
@@ -63,7 +64,8 @@ class YFinanceSource(BhavcopySource):
             ticker_sym = f"{symbol}.NS"
             try:
                 ticker = yf.Ticker(ticker_sym)
-                hist = ticker.history(start=start_str, end=end_str)
+                # auto_adjust=False ensures OHLCV prices are unadjusted, matching official Bhavcopy raw figures
+                hist = ticker.history(start=start_str, end=end_str, auto_adjust=False)
                 if hist.empty:
                     continue
 
@@ -122,6 +124,12 @@ class YFinanceSource(BhavcopySource):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
+
+        write_file_metadata(
+            target_file,
+            source_name=self.source_name,
+            url="https://query2.finance.yahoo.com/v8/finance/chart",
+        )
 
         logger.info(
             "Saved %d records to yfinance fallback file: %s",

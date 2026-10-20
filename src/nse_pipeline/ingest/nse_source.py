@@ -15,6 +15,7 @@ from pathlib import Path
 import requests
 
 from nse_pipeline.ingest.base import BhavcopySource
+from nse_pipeline.ingest.metadata import write_file_metadata
 from nse_pipeline.utils.logging import logger
 
 UDIFF_TRANSITION_DATE = date(2024, 7, 8)
@@ -52,7 +53,6 @@ class NseSource(BhavcopySource):
         falling through candidate URLs ensures ingestion resilience.
         """
         date_yyyymmdd = trade_date.strftime("%Y%m%d")
-        date_ddmmyyyy = trade_date.strftime("%d%m%Y")
         date_dd = trade_date.strftime("%d")
         date_mmm = trade_date.strftime("%b").upper()
         date_yyyy = trade_date.strftime("%Y")
@@ -62,14 +62,12 @@ class NseSource(BhavcopySource):
             return [
                 f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_yyyymmdd}_F_0000.csv.zip",
                 f"https://archives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_yyyymmdd}_F_0000.csv.zip",
-                f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{date_ddmmyyyy}.csv",
             ]
         else:
             # Legacy Bhavcopy standard (prior to July 2024)
             return [
                 f"https://archives.nseindia.com/content/historical/EQUITIES/{date_yyyy}/{date_mmm}/cm{date_dd}{date_mmm}{date_yyyy}bhav.csv.zip",
                 f"https://nsearchives.nseindia.com/content/historical/EQUITIES/{date_yyyy}/{date_mmm}/cm{date_dd}{date_mmm}{date_yyyy}bhav.csv.zip",
-                f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{date_ddmmyyyy}.csv",
             ]
 
     def fetch(self, trade_date: date, output_dir: Path) -> Path:
@@ -99,6 +97,7 @@ class NseSource(BhavcopySource):
                             csv_name = csv_files[0]
                             target_path = output_dir / csv_name
                             target_path.write_bytes(z.read(csv_name))
+                            write_file_metadata(target_path, source_name=self.source_name, url=url)
                             logger.info(
                                 "Successfully extracted raw CSV to: %s (%d bytes)",
                                 target_path,
@@ -110,6 +109,7 @@ class NseSource(BhavcopySource):
                         filename = Path(url).name
                         target_path = output_dir / filename
                         target_path.write_bytes(content)
+                        write_file_metadata(target_path, source_name=self.source_name, url=url)
                         logger.info(
                             "Successfully saved raw CSV to: %s (%d bytes)",
                             target_path,

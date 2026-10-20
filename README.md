@@ -63,9 +63,12 @@ An end-to-end batch data engineering pipeline that ingests daily National Stock 
 ## Quickstart & Local Setup
 
 ### Prerequisites
-- Python 3.11+ (Python 3.13 detected)
-- Git
-- Docker & Docker Compose (Required for Airflow and Postgres services in Phase 3+)
+- **Python:** Python 3.11+ (Python 3.13.9 supported with PySpark 4.2.0)
+- **Project Directory:** Must contain **no spaces** in the path (e.g., `C:\Projects\nse-pipeline`). Spaces cause Hadoop path-escaping failures on Windows.
+- **Java:** JDK 17 (Eclipse Temurin 17.0.20+ recommended)
+- **Hadoop winutils (Windows):** Hadoop 3.4.0 `winutils.exe` installed in `C:\hadoop\bin`, with `HADOOP_HOME=C:\hadoop` added to your system environment variables.
+- **Git**
+- **Docker & Docker Compose** (Required for Airflow and Postgres services in Phase 3+)
 
 ### 1. Clone & Set Up Virtual Environment
 
