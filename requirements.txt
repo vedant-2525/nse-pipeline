@@ -7,16 +7,12 @@ pyarrow==18.1.0
 pyspark==4.2.0
 py4j==0.10.9.7
 
-# Database and warehouse
-psycopg2-binary==2.9.10
-sqlalchemy==2.0.38
+# Database and warehouse (psycopg 3)
+psycopg[binary]==3.2.4
 
 # Configuration & environment management
 pyyaml==6.0.2
 python-dotenv==1.0.1
-
-# Dashboard
-streamlit==1.42.0
 
 # Development, testing, and linting
 pytest==8.3.4

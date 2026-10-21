@@ -135,6 +135,11 @@ python -m nse_pipeline.cli transform --from 2024-10-01 --to 2024-10-15
 python -m nse_pipeline.cli transform --date 2024-10-11 --allow-fallback
 ```
 
+> [!NOTE]
+> **Symbol Universe & Index Scope:**
+> `config/symbols.yaml` contains 51 equity symbols as a fixed convenience approximation reflecting Nifty 50 constituents around September 2024 (including BEL, TRENT, and LTIM). It is not a point-in-time constituent index; real historical backtesting requires per-date constituent tracking.
+> Passing `--all-symbols` processes all Cash Market Equities (Segment `CM`, Instrument `STK`, Series `EQ`) across the exchange (~1,800 to 1,900 symbols daily); non-equity series (`BE`, `BZ`, `GB`, `GS`, `TB`, debt) are excluded by design.
+
 ### 5. Running Linting and Tests
 
 - **Using PowerShell (Windows):**

@@ -142,3 +142,49 @@ We conducted a deep inspection of real historical Bronze files downloaded from N
 ### Trade-offs
 - Using PySpark adds JVM startup overhead (~2-3 seconds locally), but scales seamlessly to multi-year backfills and distributed cluster execution.
 
+---
+
+## ADR 005: Silver Layout Hardening, Stage Reconciliation Invariants, and Fallback Governance (Phase 2 Refinement)
+
+- **Date:** 2026-10-21
+- **Status:** Accepted
+
+### Context
+Code review of Phase 2 revealed critical operational issues:
+1. **Silver Layout Defect:** Writing to per-day directories (`.parquet(silver_dir / trade_date=...)`) stored `trade_date` both in the partition directory name and inside the Parquet payload, causing PyArrow/Pandas base-directory reads (`pd.read_parquet('data/silver/equity_prices')`) to fail with schema merge conflicts (`date32[day]` vs `dictionary<values=string...>`).
+2. **Missing Reconciliation Traceability:** When transforming with the default universe, non-universe rows were dropped silently without stage-by-stage accounting.
+3. **Unnecessary Disabling of Spark ANSI Mode:** ANSI mode was disabled globally to avoid cast errors, but `try_cast` and `try_to_date` safely return NULL on corrupted strings under ANSI mode without hiding overflow or divide-by-zero errors.
+4. **yfinance Latency on Closed Dates:** Sequential querying of 51 symbols when markets were closed took ~65s.
+5. **Symbol Universe Discrepancy:** `config/symbols.yaml` contains 51 symbols instead of 50.
+
+### Decision
+1. **Standard Hive Partitioning via Base Directory Overwrite:**
+   - Write to the base path `data/silver/equity_prices` with `.partitionBy("trade_date")` and `mode("overwrite")`.
+   - In dynamic overwrite mode, Spark replaces only the targeted `trade_date=YYYY-MM-DD` directory and strips `trade_date` from internal file columns, enabling seamless multi-partition reads via PyArrow and DuckDB.
+   - `_SUCCESS.meta.json` resides inside the partition folder and is ignored by PyArrow readers due to the leading underscore.
+2. **Deterministic Stage Reconciliation Gate:**
+   - Enforce an exact balance invariant:
+     `read_count == non_equity_filtered + universe_filtered + rejected + deduped + row_count`.
+   - Any unaccounted drop halts the pipeline immediately with a `DataQualityError`.
+3. **PySpark ANSI Mode Re-enabled:**
+   - Set `spark.sql.ansi.enabled = true`.
+   - Use `try_cast` for numeric columns and `try_to_date` for dates. Malformed values produce NULL and are diverted into quarantine without crashing.
+4. **Reject-Rate Quality Gate:**
+   - Fail the transformation if quarantined rows exceed `max_reject_rate_pct` (default 2.0% in `config/settings.yaml`) of evaluated equity records.
+5. **Symbol Universe Scope & 51-Constituent Clarification:**
+   - The discrepancy of 51 entries in `config/symbols.yaml` stems from index rebalancing around September 2024: Bharat Electronics (`BEL`) and Trent (`TRENT`) were added to Nifty 50, but `LTIMindtree` (`LTIM`) was retained alongside them in the static list.
+   - This list represents a fixed operational universe (convenience approximation) rather than point-in-time historical index membership. Real-world financial backtesting requires point-in-time constituent schedules.
+   - The `--all-symbols` flag refers specifically to all series `EQ` cash equity securities listed on NSE, explicitly excluding debt, warrants, and derivative series (`BE`, `BZ`, `GB`, `GS`, etc.).
+6. **yfinance Price Distortions & Fast Anchor Probe:**
+   - Yahoo Finance historical prices are split- and bonus-adjusted even when requesting `auto_adjust=False`. Consequently, fallback prices may diverge from official NSE bhavcopy traded prices. Silver retains strict source governance refusing fallback data by default.
+   - To avoid ~65s sequential timeouts on closed market dates, an anchor probe (`RELIANCE.NS`) is evaluated first. If no data is returned, `FileNotFoundError` is raised immediately without retrying or querying the remaining 50 symbols.
+7. **Database Driver Modernization:**
+   - Upgraded to modern `psycopg` 3 (`psycopg[binary]`), removing unused legacy drivers (`psycopg2-binary`, `sqlalchemy`, `streamlit`).
+
+### Alternatives Considered
+- *Allowing partial row drops without reconciliation:* Rejected because silent row drops are a primary cause of undetected data pipeline decay in production.
+- *Reading partition folders individually in downstream loaders:* Rejected because standard analytics engines (PyArrow, Spark, DuckDB, Trino) expect valid Hive directory partitioning.
+
+### Trade-offs
+- Writing to the base path requires explicit directory isolation during unit tests (`tmp_path`), but standardizes the lake architecture.
+
