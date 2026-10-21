@@ -1,6 +1,6 @@
 """Command Line Interface (CLI) for the NSE Market Data Pipeline.
 
-Provides subcommands to run ingestion, pipeline phases, and backfills from the terminal.
+Provides subcommands to run ingestion, Silver transformations, and pipeline phases.
 """
 
 import argparse
@@ -8,11 +8,15 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
+import yaml
+
 from nse_pipeline.ingest.downloader import BhavcopyDownloader
 from nse_pipeline.ingest.nse_source import NseSource
 from nse_pipeline.ingest.yfinance_source import YFinanceSource
-from nse_pipeline.utils.calendar import is_trading_day
+from nse_pipeline.transform.run_silver import run_silver_transform
+from nse_pipeline.utils.calendar import get_trading_days, is_trading_day
 from nse_pipeline.utils.logging import logger
+from nse_pipeline.utils.spark import stop_spark_session
 
 
 def parse_date(date_str: str) -> date:
@@ -23,6 +27,16 @@ def parse_date(date_str: str) -> date:
         raise argparse.ArgumentTypeError(
             f"Invalid date format: '{date_str}'. Expected format is YYYY-MM-DD."
         ) from e
+
+
+def load_configured_symbols(config_path: str = "config/symbols.yaml") -> list[str]:
+    """Loads configured equity symbols (e.g. Nifty 50)."""
+    p = Path(config_path)
+    if p.is_file():
+        with open(p, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+            return data.get("symbols", [])
+    return []
 
 
 def handle_ingest(args: argparse.Namespace) -> int:
@@ -36,7 +50,6 @@ def handle_ingest(args: argparse.Namespace) -> int:
     primary = NseSource() if args.source in ("nse", "auto") else None
     fallback = YFinanceSource() if args.source in ("yfinance", "auto") else None
 
-    # If user explicitly chose yfinance as sole source:
     if args.source == "yfinance":
         primary = YFinanceSource()
         fallback = None
@@ -62,6 +75,56 @@ def handle_ingest(args: argparse.Namespace) -> int:
         return 1
 
 
+def handle_transform(args: argparse.Namespace) -> int:
+    """Handles the 'transform' CLI subcommand (Bronze -> Silver)."""
+    dates_to_run: list[date] = []
+
+    if args.date:
+        dates_to_run = [args.date]
+    elif args.from_date and args.to_date:
+        if args.from_date > args.to_date:
+            print("Error: --from date cannot be later than --to date.", file=sys.stderr)
+            return 1
+        dates_to_run = get_trading_days(args.from_date, args.to_date)
+    else:
+        print("Error: Either --date or both --from and --to must be specified.", file=sys.stderr)
+        return 1
+
+    symbols_filter = None if args.all_symbols else load_configured_symbols()
+    allow_fallback: bool = args.allow_fallback
+
+    has_error = False
+    try:
+        for dt in dates_to_run:
+            if not is_trading_day(dt):
+                print(f"Skipped: {dt} is not an official NSE trading day (holiday/weekend).")
+                continue
+
+            try:
+                metrics = run_silver_transform(
+                    trade_date=dt,
+                    bronze_dir=args.bronze_dir,
+                    silver_dir=args.silver_dir,
+                    quarantine_dir=args.quarantine_dir,
+                    symbol_universe=symbols_filter,
+                    allow_fallback=allow_fallback,
+                )
+                print(
+                    f"Transform Success [{dt}]: Read={metrics['read_count']} | "
+                    f"Kept={metrics['kept_count']} | Rejected={metrics['rejected_count']} | "
+                    f"Deduped={metrics['deduped_count']} | Parquet={metrics['parquet_path']}"
+                )
+            except Exception as e:
+                logger.error("Transform failed for date %s: %s", dt, e)
+                print(f"Transform Error [{dt}]: {e}", file=sys.stderr)
+                has_error = True
+                break
+    finally:
+        stop_spark_session()
+
+    return 1 if has_error else 0
+
+
 def handle_run(args: argparse.Namespace) -> int:
     """Handles the 'run' CLI subcommand to execute the pipeline for a single date."""
     target_date: date = args.date
@@ -79,10 +142,19 @@ def handle_run(args: argparse.Namespace) -> int:
         logger.info("Phase 1 Complete: Raw file in Bronze -> %s", raw_file)
     except Exception as e:
         logger.error("Phase 1 Ingest failed: %s", e)
+        print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    # Future phases (Transform, Quality, Load) will be wired up in Phases 2-5
-    logger.info("Pipeline run for %s completed Phase 1 successfully.", target_date)
+    # Phase 2: Silver Transformation
+    try:
+        metrics = run_silver_transform(trade_date=target_date)
+        logger.info("Phase 2 Complete: Silver Parquet written -> %s", metrics["parquet_path"])
+    except Exception as e:
+        logger.error("Phase 2 Silver Transform failed: %s", e)
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    logger.info("Pipeline run for %s completed Phase 1 & 2 successfully.", target_date)
     return 0
 
 
@@ -94,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
-    # Ingest command
+    # 1. Ingest command
     ingest_parser = subparsers.add_parser(
         "ingest", help="Ingest raw bhavcopy for a specific date into Bronze"
     )
@@ -121,7 +193,54 @@ def main(argv: list[str] | None = None) -> int:
         help="Force download even if file already exists or date is a holiday/weekend",
     )
 
-    # Run command (runs pipeline end-to-end for one date)
+    # 2. Transform command (Phase 2)
+    transform_parser = subparsers.add_parser(
+        "transform", help="Transform Bronze raw files into clean Silver Parquet"
+    )
+    transform_parser.add_argument(
+        "--date",
+        type=parse_date,
+        help="Single trading date in YYYY-MM-DD format",
+    )
+    transform_parser.add_argument(
+        "--from",
+        dest="from_date",
+        type=parse_date,
+        help="Start date in YYYY-MM-DD format for range processing",
+    )
+    transform_parser.add_argument(
+        "--to",
+        dest="to_date",
+        type=parse_date,
+        help="End date in YYYY-MM-DD format for range processing",
+    )
+    transform_parser.add_argument(
+        "--bronze-dir",
+        default="data/bronze",
+        help="Path to Bronze storage base folder",
+    )
+    transform_parser.add_argument(
+        "--silver-dir",
+        default="data/silver/equity_prices",
+        help="Path to Silver storage folder",
+    )
+    transform_parser.add_argument(
+        "--quarantine-dir",
+        default="data/quarantine/equity_prices",
+        help="Path to Quarantine storage folder",
+    )
+    transform_parser.add_argument(
+        "--all-symbols",
+        action="store_true",
+        help="Process all equity symbols in the market rather than filtering by config/symbols.yaml",
+    )
+    transform_parser.add_argument(
+        "--allow-fallback",
+        action="store_true",
+        help="Permit processing fallback (yfinance) files when official NSE files are missing",
+    )
+
+    # 3. Run command (runs pipeline end-to-end for one date)
     run_parser = subparsers.add_parser("run", help="Run end-to-end pipeline stages for a date")
     run_parser.add_argument(
         "--date",
@@ -139,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ingest":
         return handle_ingest(args)
+    elif args.command == "transform":
+        return handle_transform(args)
     elif args.command == "run":
         return handle_run(args)
     else:

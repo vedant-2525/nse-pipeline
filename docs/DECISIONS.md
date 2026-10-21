@@ -78,3 +78,67 @@ During ingestion exploration, an auxiliary NSE reporting file `sec_bhavdata_full
 ### Trade-offs
 - Delivery data is not ingested into the Gold layer, but the core pipeline schema remains clean, predictable, and strictly conforming to official CM Bhavcopy standards.
 
+---
+
+## ADR 004: Silver Layer Schema Normalization, PySpark Architecture, and Quarantine Design (Phase 2)
+
+- **Date:** 2026-10-20
+- **Status:** Accepted
+
+### Context & Real File Study (Step 0 Findings)
+We conducted a deep inspection of real historical Bronze files downloaded from NSE:
+1. **Modern UDiFF format (`BhavCopy_NSE_CM_0_0_0_20241011_F_0000.csv`):**
+   - 34 columns: `TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,FininstrmActlXpryDt,StrkPric,OptnTp,FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd,SsnId,NewBrdLotQty,Rmks,Rsvd1,Rsvd2,Rsvd3,Rsvd4`.
+   - Date format: `YYYY-MM-DD` (e.g. `2024-10-11`).
+   - Turnover unit (`TtlTrfVal`): Exact Indian Rupees (INR) (e.g., M&M volume 1,652,856 @ close 3134.35 = 5,204,226,016.40 INR).
+   - Segments: Segment `Sgmt=CM` and `FinInstrmTp=STK` denote equity stocks. Total rows: 2,852; Series `EQ` rows: 1,893. Other series present: `BE`, `SM`, `ST`, `GB`, `GS`, `TB`, `N5-N6`.
+2. **Legacy Bhavcopy format (`cm15JAN2024bhav.csv`):**
+   - 14 columns (13 named columns + 1 trailing empty column due to a trailing comma in the header: `ISIN,`):
+     `SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,TOTALTRADES,ISIN,`.
+   - Date format: `DD-MMM-YYYY` (e.g. `15-JAN-2024`).
+   - Turnover unit (`TOTTRDVAL`): Exact Indian Rupees (INR).
+   - Total rows: 2,682; Series `EQ` rows: 1,795.
+3. **Key Observations & Invariants:**
+   - Both formats have 100% unique primary keys on `(trade_date, symbol, series)` in their raw state.
+   - For series `EQ`, all records strictly satisfy `low <= open, close, last <= high` and `high >= low`. Non-equity series (e.g. debt series `AT`) occasionally have zeroes in `LAST`, confirming that filtering for equity cash series (`EQ`) avoids false data anomalies.
+   - Leading/trailing whitespace occurs in symbols and series across CSV files, requiring trimming and uppercasing.
+
+### Decision
+1. **Canonical Silver Schema:**
+   Normalise both modern UDiFF and legacy formats into one uniform schema:
+   - `trade_date` (DateType): Standard ISO date `YYYY-MM-DD`.
+   - `symbol` (StringType): Uppercase, trimmed equity ticker.
+   - `series` (StringType): Uppercase, trimmed series code (e.g., `EQ`).
+   - `isin` (StringType, nullable): International Securities Identification Number.
+   - `open`, `high`, `low`, `close`, `last`, `prev_close` (DecimalType(18, 4)): High-precision fixed-point decimal to avoid IEEE-754 floating point imprecision.
+   - `volume` (LongType): Traded share quantity.
+   - `turnover` (DecimalType(22, 2)): Exact turnover in Indian Rupees (INR).
+   - `trades` (IntegerType, nullable): Total transaction count.
+   - `source_format` (StringType): `"udiff"`, `"legacy"`, or `"yfinance"`.
+   - `source_file` (StringType): Originating Bronze filename.
+   - `ingested_at` (TimestampType): Pipeline processing timestamp (UTC).
+2. **Schema Enforcement & Quarantine Pattern:**
+   - Ingest CSVs with explicit string schemas (no schema inference).
+   - Cast strings explicitly. Any rows with unparseable values, non-positive prices, negative volumes, or inverted ranges (`high < low` or `open/close/last` outside `[low, high]`) are quarantined into `data/quarantine/equity_prices/trade_date=YYYY-MM-DD/` with a descriptive `reject_reason` column.
+   - Bad rows are never silently discarded.
+3. **Data Quality Gate (Hard Failures):**
+   A transformation run immediately halts with a non-zero exit code if:
+   - Duplicate keys exist in clean output on `(trade_date, symbol, series)`.
+   - Any clean row violates `high >= low` or price positivity (`price > 0`).
+   - Any clean row contains `open`, `close`, or `last` outside `[low, high]`.
+   - Clean row count is outside configured plausible bounds (default full market `[500, 3000]`; Nifty 50 `[40, 55]`).
+   - Output `trade_date` does not match the partition date.
+4. **Source Awareness:**
+   - The Silver layer strictly requires official NSE Bronze files by default.
+   - Fallback files (`yfinance`) are rejected unless the caller explicitly passes `--allow-fallback`.
+5. **Idempotent Parquet Lake Storage:**
+   - Parquet partitions are written to `data/silver/equity_prices/trade_date=YYYY-MM-DD/` with Spark's `dynamic` partition overwrite mode. Re-running a date replaces only that partition and leaves other dates untouched.
+   - A `_SUCCESS` partition metadata JSON is written with run statistics (read, kept, rejected, deduped counts).
+
+### Alternatives Considered
+- *Using DoubleType for prices:* Rejected because floating-point representation causes precision loss (e.g., `0.1 + 0.2 != 0.3`). `Decimal(18, 4)` is the financial engineering standard.
+- *Inferring CSV schema:* Rejected because Spark schema inference reads the entire file twice and can misinterpret sparse columns. Explicit string schema reading with typed casting guarantees full control and quarantine interception.
+
+### Trade-offs
+- Using PySpark adds JVM startup overhead (~2-3 seconds locally), but scales seamlessly to multi-year backfills and distributed cluster execution.
+

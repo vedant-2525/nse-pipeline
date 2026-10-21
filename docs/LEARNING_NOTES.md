@@ -64,3 +64,47 @@ A companion study guide for interviews, explaining the concepts, design rational
 3. **Q: Why should unit tests never make external HTTP calls?**
    *Answer:* Network calls introduce non-determinism, slow down test suites, break when offline, and leak credentials or breach rate limits on external services. Tests should mock network boundaries and validate parsing logic using static fixtures.
 
+---
+
+## Phase 2: PySpark Silver Layer, Schema Normalization & Quality Gates
+
+### Concepts Used
+1. **Schema Normalization across Drifted Formats:**
+   - NSE transitioned from a legacy 14-column format (`cmDDMMMYYYYbhav.csv`) to a 34-column UDiFF format (`BhavCopy_NSE_CM_...`).
+   - Rather than separate pipelines, format detection inspects headers dynamically and maps both sources to a single canonical Silver schema.
+2. **Explicit Schemas vs Schema Inference:**
+   - Production PySpark pipelines should avoid `.option("inferSchema", "true")`. Inference incurs a full second pass over files and can misclassify sparse or edge-case columns.
+   - Reading all columns as explicit strings first, followed by explicit casting, ensures full control over parse failures and data quarantine.
+3. **The Quarantine Pattern (Zero Silent Data Loss):**
+   - Corrupt or invalid rows (e.g. malformed numbers, inverted `high < low`, prices out of range) are split from clean data and saved to `data/quarantine/equity_prices/` with a `reject_reason` column.
+   - Clean data flows to Silver; quarantined rows are preserved for auditability and replay without crashing the batch run.
+4. **ANSI SQL Mode & `try_cast` in PySpark 4.x:**
+   - Starting in Spark 4.0, ANSI SQL mode is enabled by default (`spark.sql.ansi.enabled=true`). Under ANSI mode, invalid casts throw runtime exceptions (`NumberFormatException`) instead of producing `null`.
+   - To support resilient data validation and quarantine routing, we use `try_cast(col as type)` expressions, safely returning `null` on corrupt inputs for quarantine tagging.
+5. **Dynamic Partition Overwrites:**
+   - Using `spark.sql.sources.partitionOverwriteMode = dynamic` ensures writing to `data/silver/equity_prices/trade_date=YYYY-MM-DD/` only overwrites the target date partition, leaving all historical date partitions untouched.
+   - This guarantees idempotent re-runs: running the same trade date twice replaces the partition cleanly without duplicates.
+6. **Fixed-Point Financial Arithmetic:**
+   - Equity prices are stored as `Decimal(18, 4)` and turnover as `Decimal(22, 2)`.
+   - Binary floating-point types (`DoubleType`, `FloatType`) introduce rounding artifacts (e.g., `0.1 + 0.2 = 0.30000000000000004`) which corrupt financial reconciliation.
+7. **Windows Hadoop & Spark Environment Initialization:**
+   - Windows lacks native POSIX filesystem tools. PySpark requires `winutils.exe` in `%HADOOP_HOME%\bin` for local directory management.
+   - Spark worker processes require explicit `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` environment variables pointing to `sys.executable` to avoid spawning incorrect system Python binaries.
+
+### Why This Design?
+- **Hard Quality Invariant Gates:** Data pipelines should fail fast and loudly when unexpected domain violations occur (e.g. duplicate primary keys, future dates, negative prices). Halting before the warehouse load prevents polluted data from corrupting downstream models and executive reports.
+- **Source Governance:** The Silver layer enforces that official exchange files are processed by default. Fallback sources (e.g. Yahoo Finance) are refused unless explicitly permitted via `--allow-fallback` to protect warehouse integrity.
+
+### Common Interview Questions
+1. **Q: Why should you avoid `inferSchema` in production Spark pipelines?**
+   *Answer:* `inferSchema` requires a preliminary scan of the entire dataset before actual processing begins, doubling I/O costs. Furthermore, if a numeric column contains empty strings or unexpected symbols later in the file, inference may choose the wrong type or fail unexpectedly across batches.
+2. **Q: How do you handle dirty or malformed records without failing the entire batch?**
+   *Answer:* Use the Quarantine Pattern. Parse values using safe conversion (such as `try_cast`), identify violating rows via validation rules, and route them to a separate partitioned quarantine dataset with reason codes (`reject_reason`). This allows valid rows to proceed downstream while corrupt rows are preserved for alerting, debugging, and backfilling.
+3. **Q: What is the difference between static and dynamic partition overwrite in Spark?**
+   *Answer:* In static partition overwrite mode (the default), Spark deletes the entire dataset directory before writing the new partition data, wiping out all other partitions if not scoped correctly. Dynamic partition overwrite (`partitionOverwriteMode = dynamic`) overwrites only the specific partition folders corresponding to the data present in the DataFrame being written.
+4. **Q: Why use `DecimalType` instead of `DoubleType` for financial market data?**
+   *Answer:* `DoubleType` uses IEEE-754 64-bit floating point representation, which cannot precisely represent many base-10 decimal fractions (e.g., 0.05). In financial systems, cumulative rounding errors alter traded values, portfolio balances, and audit reports. `DecimalType` preserves exact fixed-point precision.
+5. **Q: How does PySpark handle Windows local execution differences?**
+   *Answer:* Windows requires native Hadoop binaries (`winutils.exe` and `hadoop.dll`) because Spark uses Hadoop's FileUtil class to manage file permissions and temporary directories. Without `HADOOP_HOME` and `winutils.exe`, Spark operations like Parquet writes or shuffle spilling fail with `UnsatisfiedLinkError` or `NullPointerException`.
+
+

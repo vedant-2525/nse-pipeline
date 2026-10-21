@@ -62,13 +62,18 @@ An end-to-end batch data engineering pipeline that ingests daily National Stock 
 
 ## Quickstart & Local Setup
 
-### Prerequisites
-- **Python:** Python 3.11+ (Python 3.13.9 supported with PySpark 4.2.0)
-- **Project Directory:** Must contain **no spaces** in the path (e.g., `C:\Projects\nse-pipeline`). Spaces cause Hadoop path-escaping failures on Windows.
-- **Java:** JDK 17 (Eclipse Temurin 17.0.20+ recommended)
-- **Hadoop winutils (Windows):** Hadoop 3.4.0 `winutils.exe` installed in `C:\hadoop\bin`, with `HADOOP_HOME=C:\hadoop` added to your system environment variables.
-- **Git**
-- **Docker & Docker Compose** (Required for Airflow and Postgres services in Phase 3+)
+### Windows & Spark Prerequisites
+
+Running PySpark 4 on Windows requires specific environment setup:
+1. **Python 3.13 & PySpark 4.2.0**: PySpark 3.5.x python workers crash on Python 3.13 due to internal API changes. `pyspark==4.2.0` is strictly required.
+2. **Path without spaces**: Clone the repository to a path without spaces (e.g. `C:\Projects\nse-pipeline`). Paths with spaces break Hadoop file URI resolution on Windows.
+3. **Java JDK 17**: Install Eclipse Temurin 17 (or Oracle JDK 17) and ensure `JAVA_HOME` points to your JDK directory (e.g., `C:\Program Files\Eclipse Adoptium\jdk-17...`).
+4. **Hadoop winutils (Hadoop 3.4.0)**:
+   - Create directory `C:\hadoop\bin`.
+   - Download Hadoop 3.4.0 `winutils.exe` and `hadoop.dll` into `C:\hadoop\bin`.
+   - Set environment variable `HADOOP_HOME=C:\hadoop` and add `C:\hadoop\bin` to `PATH`.
+5. **PySpark Worker Environment Variables**:
+   - `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` must point to your virtualenv's Python binary (e.g., `C:\Projects\nse-pipeline\.venv\Scripts\python.exe`). The pipeline's helper (`src/nse_pipeline/utils/spark.py`) configures this automatically upon initialization.
 
 ### 1. Clone & Set Up Virtual Environment
 
@@ -104,7 +109,33 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-### 4. Running Linting and Tests
+### 4. Running the Pipeline CLI
+
+#### Phase 1: Ingestion (Bronze Layer)
+```powershell
+# Ingest modern UDiFF format
+python -m nse_pipeline.cli ingest --date 2024-10-11
+
+# Ingest legacy format
+python -m nse_pipeline.cli ingest --date 2024-01-15
+```
+
+#### Phase 2: PySpark Transformation (Silver Layer)
+```powershell
+# Transform single date (default Nifty 50 universe)
+python -m nse_pipeline.cli transform --date 2024-10-11
+
+# Transform full equity market (all traded symbols)
+python -m nse_pipeline.cli transform --date 2024-10-11 --all-symbols
+
+# Transform date range (skips weekends and NSE holidays automatically)
+python -m nse_pipeline.cli transform --from 2024-10-01 --to 2024-10-15
+
+# Transform with fallback source explicitly permitted
+python -m nse_pipeline.cli transform --date 2024-10-11 --allow-fallback
+```
+
+### 5. Running Linting and Tests
 
 - **Using PowerShell (Windows):**
   ```powershell
@@ -122,6 +153,51 @@ Copy-Item .env.example .env
   ruff format --check .
   pytest
   ```
+
+---
+
+## Bronze to Silver Data Flow
+
+```text
+[Bronze Raw CSV]
+  ├── Modern UDiFF: BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv (34 cols)
+  └── Legacy: cmDDMMMYYYYbhav.csv (14 cols)
+         │
+         ▼
+[1. Source Governance & Detection]
+  ├── Verify source metadata: official NSE vs fallback (yfinance refused without --allow-fallback)
+  ├── Inspect headers to detect "udiff" vs "legacy" (fails on unsupported delivery reports)
+  └── Read with explicit String schema (no inferSchema)
+         │
+         ▼
+[2. Normalization & Filtering]
+  ├── Map columns to canonical names: trade_date, symbol, series, isin, OHLCV, turnover, trades
+  ├── Trim whitespace & uppercase ticker/series
+  └── Filter for Cash Market Equities: Sgmt='CM', FinInstrmTp='STK', Series='EQ'
+         │
+         ▼
+[3. Resilient Type Casting & Quarantine]
+  ├── Use try_cast(...) expressions (prevents ANSI mode NumberFormatException crashes)
+  ├── Check price positivity, valid dates, volume >= 0, and high >= low bounds
+  ├── Split valid rows from invalid rows
+  └── Invalid rows -> Parquet at data/quarantine/equity_prices/trade_date=YYYY-MM-DD/
+         │
+         ▼
+[4. Deduplication & Data Quality Gates]
+  ├── Drop exact duplicate rows; enforce uniqueness on (trade_date, symbol, series)
+  └── Hard validation gates (fails pipeline on violation):
+        - high >= low
+        - low <= open, close, last <= high
+        - prices > 0, volume >= 0
+        - trade_date matches partition date
+        - row count within configured bounds
+         │
+         ▼
+[5. Idempotent Silver Lake Output]
+  ├── Write Parquet using dynamic partition overwrite:
+  │     data/silver/equity_prices/trade_date=YYYY-MM-DD/
+  └── Write partition audit metadata: _SUCCESS.meta.json
+```
 
 ---
 
@@ -155,7 +231,7 @@ Copy-Item .env.example .env
 
 - [x] **Phase 0: Scaffold** - Repository structure, config files, CI skeleton, ruff/pytest setup, and ADRs.
 - [x] **Phase 1: Ingest** - `BhavcopySource` interface, official NSE source with fallback to `yfinance`, retry mechanism.
-- [ ] **Phase 2: Transform (PySpark)** - Canonical schema mapping, cleaning, date-partitioned Parquet generation.
+- [x] **Phase 2: Transform (PySpark)** - Canonical schema mapping, cleaning, date-partitioned Parquet generation.
 - [ ] **Phase 3: Warehouse & Load** - Star schema DDL, idempotent Postgres loader, pipeline run logging.
 - [ ] **Phase 4: Analytics Views** - Moving averages, rolling volatility, top movers, sector returns.
 - [ ] **Phase 5: Data Quality** - Stop-the-line validation gates and ops metadata logging.
