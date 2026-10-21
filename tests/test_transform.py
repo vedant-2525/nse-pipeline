@@ -19,7 +19,12 @@ from nse_pipeline.transform.clean import (
     normalize_columns,
     validate_and_split,
 )
-from nse_pipeline.transform.quality import DataQualityError, validate_silver_quality
+from nse_pipeline.transform.quality import (
+    DataQualityError,
+    validate_reconciliation_gate,
+    validate_reject_rate_gate,
+    validate_silver_quality,
+)
 from nse_pipeline.transform.run_silver import run_silver_transform
 from nse_pipeline.transform.schema import (
     SILVER_SCHEMA,
@@ -316,3 +321,119 @@ def test_fallback_refused_without_allow_fallback_flag(tmp_path: Path, spark_sess
     )
     assert metrics["source_type"] == "fallback"
     assert metrics["kept_count"] == 1
+
+
+def test_reconciliation_gate_balanced_and_failure():
+    """Verify reconciliation gate passes on exact balance and fails with DataQualityError otherwise."""
+    # Balanced case: 100 = 20 + 30 + 5 + 5 + 40
+    validate_reconciliation_gate(
+        read_count=100,
+        non_equity_filtered=20,
+        universe_filtered=30,
+        rejected=5,
+        deduped=5,
+        row_count=40,
+    )
+
+    # Imbalanced case: sum is 99 != 100
+    with pytest.raises(DataQualityError, match="DQ FAIL \\[Row Reconciliation\\]"):
+        validate_reconciliation_gate(
+            read_count=100,
+            non_equity_filtered=20,
+            universe_filtered=30,
+            rejected=5,
+            deduped=5,
+            row_count=39,
+        )
+
+
+def test_reject_rate_gate_pass_and_failure():
+    """Verify reject rate gate enforces maximum threshold."""
+    # 1 out of 100 is 1.0% <= 2.0% -> Pass
+    validate_reject_rate_gate(
+        quarantine_count=1, equity_evaluated_count=100, max_reject_rate_pct=2.0
+    )
+
+    # 3 out of 100 is 3.0% > 2.0% -> Fail
+    with pytest.raises(DataQualityError, match="DQ FAIL \\[Reject Rate Exceeded\\]"):
+        validate_reject_rate_gate(
+            quarantine_count=3, equity_evaluated_count=100, max_reject_rate_pct=2.0
+        )
+
+
+def test_partitioned_parquet_layout_multi_day_and_idempotency(
+    tmp_path: Path, spark_session: SparkSession
+):
+    """Verify multi-day partitioned Parquet loading via PyArrow and partition overwrite isolation."""
+    import pandas as pd
+
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver" / "equity_prices"
+    quarantine_dir = tmp_path / "quarantine" / "equity_prices"
+
+    # Setup Day 1 (Modern format)
+    d1 = date(2024, 10, 11)
+    p1 = bronze_dir / f"trade_date={d1}"
+    p1.mkdir(parents=True)
+    fix1 = Path("tests/fixtures/bhavcopy_new_sample.csv")
+    f1 = p1 / fix1.name
+    f1.write_bytes(fix1.read_bytes())
+    write_file_metadata(f1, "nse_official", "https://example.com/bhav1.zip")
+
+    # Setup Day 2 (Legacy format)
+    d2 = date(2024, 1, 15)
+    p2 = bronze_dir / f"trade_date={d2}"
+    p2.mkdir(parents=True)
+    fix2 = Path("tests/fixtures/bhavcopy_legacy_sample.csv")
+    f2 = p2 / fix2.name
+    f2.write_bytes(fix2.read_bytes())
+    write_file_metadata(f2, "nse_official", "https://example.com/bhav2.zip")
+
+    # Transform Day 1
+    run_silver_transform(
+        trade_date=d1,
+        bronze_dir=bronze_dir,
+        silver_dir=silver_dir,
+        quarantine_dir=quarantine_dir,
+        spark=spark_session,
+        min_row_count=1,
+    )
+
+    # Transform Day 2
+    run_silver_transform(
+        trade_date=d2,
+        bronze_dir=bronze_dir,
+        silver_dir=silver_dir,
+        quarantine_dir=quarantine_dir,
+        spark=spark_session,
+        min_row_count=1,
+    )
+
+    # Read the base directory with pandas/pyarrow
+    combined_df = pd.read_parquet(silver_dir)
+    assert len(combined_df) > 0
+    grouped = combined_df.groupby("trade_date", observed=False).size()
+    assert str(d1) in grouped.index
+    assert str(d2) in grouped.index
+
+    # Check that trade_date is a single consistent type (category/object)
+    assert "trade_date" in combined_df.columns
+
+    # Record modification times of Day 2 files
+    d2_files = list((silver_dir / f"trade_date={d2}").glob("*.parquet"))
+    assert len(d2_files) > 0
+    d2_mtimes_before = [f.stat().st_mtime_ns for f in d2_files]
+
+    # Re-run Day 1
+    run_silver_transform(
+        trade_date=d1,
+        bronze_dir=bronze_dir,
+        silver_dir=silver_dir,
+        quarantine_dir=quarantine_dir,
+        spark=spark_session,
+        min_row_count=1,
+    )
+
+    # Assert Day 2 files were completely untouched
+    d2_mtimes_after = [f.stat().st_mtime_ns for f in d2_files]
+    assert d2_mtimes_before == d2_mtimes_after

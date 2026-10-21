@@ -27,9 +27,9 @@ def normalize_columns(df: DataFrame, source_format: str, source_file: str) -> Da
     now_ts = datetime.now(UTC)
 
     if source_format == "udiff":
-        # UDiFF dates are ISO YYYY-MM-DD
+        # UDiFF dates are ISO YYYY-MM-DD; use try_to_date for safe ANSI parsing
         return df.select(
-            F.to_date(F.trim(F.col("TradDt")), "yyyy-MM-dd").alias("trade_date"),
+            F.expr("try_to_date(trim(TradDt), 'yyyy-MM-dd')").alias("trade_date"),
             F.upper(F.trim(F.col("TckrSymb"))).alias("symbol"),
             F.upper(F.trim(F.col("SctySrs"))).alias("series"),
             F.when(F.trim(F.col("ISIN")) != "", F.trim(F.col("ISIN")))
@@ -54,9 +54,9 @@ def normalize_columns(df: DataFrame, source_format: str, source_file: str) -> Da
     elif source_format in ("legacy", "yfinance"):
         # Legacy dates are formatted like 15-JAN-2024
         # yfinance fallback produces either YYYY-MM-DD or DD-MMM-YYYY
-        parsed_date = F.coalesce(
-            F.to_date(F.trim(F.col("TIMESTAMP")), "dd-MMM-yyyy"),
-            F.to_date(F.trim(F.col("TIMESTAMP")), "yyyy-MM-dd"),
+        # Use try_to_date to return NULL on malformed dates under ANSI mode
+        parsed_date = F.expr(
+            "coalesce(try_to_date(trim(TIMESTAMP), 'dd-MMM-yyyy'), try_to_date(trim(TIMESTAMP), 'yyyy-MM-dd'))"
         )
 
         return df.select(
@@ -85,13 +85,12 @@ def normalize_columns(df: DataFrame, source_format: str, source_file: str) -> Da
         raise ValueError(f"Unsupported format: '{source_format}'")
 
 
-def filter_equities(
+def filter_cash_equities(
     df: DataFrame,
     source_format: str,
     allowed_series: list[str] | None = None,
-    symbol_universe: list[str] | None = None,
 ) -> DataFrame:
-    """Filters incoming data for Cash Equity segment records (series EQ, etc.).
+    """Filters incoming normalized records for Cash Market Equities (segment CM, instrument STK, series EQ).
 
     Why this design:
     Bhavcopy files bundle cash equities with derivatives, government securities (GB/GS/TB),
@@ -99,21 +98,33 @@ def filter_equities(
     the company equity shares expected by downstream financial analytics.
     """
     series_list = [s.upper() for s in (allowed_series or ["EQ"])]
-
-    # 1. Filter out non-equity segments in modern format
     filtered_df = df
     if source_format == "udiff":
         filtered_df = filtered_df.filter((F.col("_sgmt") == "CM") & (F.col("_fin_type") == "STK"))
-
-    # 2. Filter for allowed equity series
     filtered_df = filtered_df.filter(F.col("series").isin(series_list))
-
-    # 3. Optional symbol universe filter (e.g. Nifty 50)
-    if symbol_universe:
-        symbols_upper = [s.upper() for s in symbol_universe]
-        filtered_df = filtered_df.filter(F.col("symbol").isin(symbols_upper))
-
     return filtered_df.drop("_sgmt", "_fin_type")
+
+
+def filter_universe(
+    df: DataFrame,
+    symbol_universe: list[str] | None = None,
+) -> DataFrame:
+    """Filters cash equity records to the configured symbol universe (e.g. Nifty 50)."""
+    if not symbol_universe:
+        return df
+    symbols_upper = [s.upper() for s in symbol_universe]
+    return df.filter(F.col("symbol").isin(symbols_upper))
+
+
+def filter_equities(
+    df: DataFrame,
+    source_format: str,
+    allowed_series: list[str] | None = None,
+    symbol_universe: list[str] | None = None,
+) -> DataFrame:
+    """Backwards-compatible helper combining cash equity and symbol universe filtering."""
+    cash_eq = filter_cash_equities(df, source_format, allowed_series)
+    return filter_universe(cash_eq, symbol_universe)
 
 
 def validate_and_split(df: DataFrame) -> tuple[DataFrame, DataFrame]:

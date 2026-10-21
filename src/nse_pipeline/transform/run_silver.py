@@ -15,15 +15,21 @@ from pathlib import Path
 from typing import Any
 
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 
 from nse_pipeline.ingest.metadata import read_file_metadata
 from nse_pipeline.transform.clean import (
     deduplicate_records,
-    filter_equities,
+    filter_cash_equities,
+    filter_universe,
     normalize_columns,
     validate_and_split,
 )
-from nse_pipeline.transform.quality import validate_silver_quality
+from nse_pipeline.transform.quality import (
+    validate_reconciliation_gate,
+    validate_reject_rate_gate,
+    validate_silver_quality,
+)
 from nse_pipeline.transform.schema import (
     detect_format,
     get_raw_schema_for_format,
@@ -106,11 +112,12 @@ def run_silver_transform(
     spark: SparkSession | None = None,
     min_row_count: int | None = None,
     max_row_count: int | None = None,
+    max_reject_rate_pct: float = 2.0,
 ) -> dict[str, Any]:
     """Executes the Bronze-to-Silver transformation pipeline for a single trade date.
 
     Returns:
-        dict containing metrics (read_count, kept_count, rejected_count, deduped_count, etc.)
+        dict containing metrics (read_count, non_equity_filtered, universe_filtered, rejected, deduped, row_count, etc.)
     """
     start_time = time.time()
     bronze_path = Path(bronze_dir)
@@ -145,42 +152,81 @@ def run_silver_transform(
         raw_df, source_format=source_format, source_file=raw_file.name
     )
 
-    # 5. Filter for Cash Equity segment
-    equity_df = filter_equities(
+    # 5. Stage 1 Filter: Cash Equity segment (series EQ, etc.)
+    cash_equity_df = filter_cash_equities(
         normalized_df,
         source_format=source_format,
         allowed_series=allowed_series or ["EQ"],
-        symbol_universe=symbol_universe,
     )
-    equity_count = equity_df.count()
+    cash_equity_count = cash_equity_df.count()
+    non_equity_filtered = read_count - cash_equity_count
     logger.info(
-        "Filtered %d cash equity records (series %s).", equity_count, allowed_series or ["EQ"]
+        "Stage 1 [Cash Equity Filter]: Excluded %d non-equity records; retained %d cash equity records (series %s).",
+        non_equity_filtered,
+        cash_equity_count,
+        allowed_series or ["EQ"],
     )
 
-    # 6. Apply type casting and quarantine invalid rows
-    clean_candidates_df, quarantine_df = validate_and_split(equity_df)
+    # 6. Stage 2 Filter: Symbol Universe filtering
+    universe_df = filter_universe(cash_equity_df, symbol_universe=symbol_universe)
+    universe_count = universe_df.count()
+    universe_filtered = cash_equity_count - universe_count
+    if symbol_universe:
+        logger.info(
+            "Stage 2 [Universe Filter]: Excluded %d non-universe records; retained %d records matching target universe (%d symbols).",
+            universe_filtered,
+            universe_count,
+            len(symbol_universe),
+        )
+    else:
+        logger.info(
+            "Stage 2 [Universe Filter]: Processed all symbols (--all-symbols active); 0 excluded, retained all %d records.",
+            universe_count,
+        )
+
+    # 7. Stage 3: Type casting and quarantine invalid rows
+    clean_candidates_df, quarantine_df = validate_and_split(universe_df)
     quarantine_count = quarantine_df.count()
+    clean_count = clean_candidates_df.count()
+    logger.info(
+        "Stage 3 [Validation & Quarantine]: Validated %d records; quarantined %d invalid records.",
+        clean_count,
+        quarantine_count,
+    )
 
     if quarantine_count > 0:
-        logger.warning("Quarantined %d invalid records for date %s.", quarantine_count, date_str)
-        # Write quarantined records to Parquet
-        quarantine_partition = quarantine_path / f"trade_date={date_str}"
-        quarantine_partition.mkdir(parents=True, exist_ok=True)
-        quarantine_df.write.mode("overwrite").parquet(quarantine_partition.resolve().as_posix())
-        logger.info("Saved quarantine Parquet dataset to: %s", quarantine_partition)
+        logger.warning(
+            "Quarantined %d invalid records for date %s (saved to %s).",
+            quarantine_count,
+            date_str,
+            quarantine_path,
+        )
+        quarantine_path.mkdir(parents=True, exist_ok=True)
+        # Ensure trade_date is non-null for partition column
+        quarantine_to_write = quarantine_df.withColumn(
+            "trade_date", F.coalesce(F.col("trade_date"), F.lit(trade_date))
+        )
+        quarantine_to_write.write.mode("overwrite").partitionBy("trade_date").parquet(
+            quarantine_path.resolve().as_posix()
+        )
 
-    # 7. Deduplicate records
+    # 8. Stage 4: Deduplicate records
     deduped_df, deduped_count = deduplicate_records(clean_candidates_df)
-    kept_count = deduped_df.count()
-    logger.info("Retained %d clean records after validation and deduplication.", kept_count)
+    row_count = deduped_df.count()
+    logger.info(
+        "Stage 4 [Deduplication]: Dropped %d duplicate keys; retained %d final clean records.",
+        deduped_count,
+        row_count,
+    )
 
-    # 8. Dynamic bounds checking based on symbol universe vs full market
+    # 9. Dynamic bounds checking based on symbol universe vs full market
     if min_row_count is None:
         min_row_count = 40 if symbol_universe else 500
     if max_row_count is None:
         max_row_count = 60 if symbol_universe else 3500
 
-    # 9. Hard Data Quality Gates
+    # 10. Data Quality Gates:
+    # 10a. Critical quality invariants on clean output
     validate_silver_quality(
         deduped_df,
         expected_date=trade_date,
@@ -188,22 +234,44 @@ def run_silver_transform(
         max_row_count=max_row_count,
     )
 
-    # 10. Write clean Parquet partition
+    # 10b. Reject rate gate
+    validate_reject_rate_gate(
+        quarantine_count=quarantine_count,
+        equity_evaluated_count=universe_count,
+        max_reject_rate_pct=max_reject_rate_pct,
+    )
+
+    # 10c. Row-count reconciliation gate: read_count == non_equity + universe + rejected + deduped + row_count
+    validate_reconciliation_gate(
+        read_count=read_count,
+        non_equity_filtered=non_equity_filtered,
+        universe_filtered=universe_filtered,
+        rejected=quarantine_count,
+        deduped=deduped_count,
+        row_count=row_count,
+    )
+
+    # 11. Write clean Parquet partition using dynamic partition overwrite at base path
+    silver_path.mkdir(parents=True, exist_ok=True)
+    deduped_df.write.mode("overwrite").partitionBy("trade_date").parquet(
+        silver_path.resolve().as_posix()
+    )
     silver_partition = silver_path / f"trade_date={date_str}"
-    silver_partition.mkdir(parents=True, exist_ok=True)
-    deduped_df.write.mode("overwrite").parquet(silver_partition.resolve().as_posix())
-    logger.info("SUCCESS: Wrote %d clean Parquet records to: %s", kept_count, silver_partition)
+    logger.info(
+        "SUCCESS: Wrote %d clean Parquet records to partition: %s", row_count, silver_partition
+    )
 
     duration = round(time.time() - start_time, 2)
 
-    # 11. Write _SUCCESS-style partition metadata JSON
+    # 12. Write _SUCCESS-style partition metadata JSON inside partition folder
     success_meta = {
         "trade_date": date_str,
-        "row_count": kept_count,
         "read_count": read_count,
-        "equity_filtered_count": equity_count,
-        "rejected_count": quarantine_count,
-        "deduped_count": deduped_count,
+        "non_equity_filtered": non_equity_filtered,
+        "universe_filtered": universe_filtered,
+        "rejected": quarantine_count,
+        "deduped": deduped_count,
+        "row_count": row_count,
         "source_file": raw_file.name,
         "source_format": source_format,
         "source_type": source_type,
@@ -217,9 +285,14 @@ def run_silver_transform(
     metrics = {
         "trade_date": trade_date,
         "read_count": read_count,
-        "kept_count": kept_count,
+        "non_equity_filtered": non_equity_filtered,
+        "universe_filtered": universe_filtered,
+        "rejected": quarantine_count,
         "rejected_count": quarantine_count,
+        "deduped": deduped_count,
         "deduped_count": deduped_count,
+        "row_count": row_count,
+        "kept_count": row_count,
         "source_format": source_format,
         "source_type": source_type,
         "duration_seconds": duration,

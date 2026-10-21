@@ -111,8 +111,12 @@ def handle_transform(args: argparse.Namespace) -> int:
                 )
                 print(
                     f"Transform Success [{dt}]: Read={metrics['read_count']} | "
-                    f"Kept={metrics['kept_count']} | Rejected={metrics['rejected_count']} | "
-                    f"Deduped={metrics['deduped_count']} | Parquet={metrics['parquet_path']}"
+                    f"NonEquity={metrics['non_equity_filtered']} | "
+                    f"Universe={metrics['universe_filtered']} | "
+                    f"Rejected={metrics['rejected']} | "
+                    f"Deduped={metrics['deduped']} | "
+                    f"RowCount={metrics['row_count']} | "
+                    f"Parquet={metrics['parquet_path']}"
                 )
             except Exception as e:
                 logger.error("Transform failed for date %s: %s", dt, e)

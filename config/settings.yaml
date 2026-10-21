@@ -31,3 +31,4 @@ quality:
   min_expected_symbol_pct: 0.90
   max_daily_move_warn_pct: 0.20
   max_null_rate_warn_pct: 0.05
+  max_reject_rate_pct: 2.0
