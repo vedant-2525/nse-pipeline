@@ -324,3 +324,22 @@ def test_download_writes_metadata_json(tmp_path: Path):
     assert data["file_size_bytes"] == len("SAMPLE CONTENT")
     assert "sha256" in data
     assert len(data["sha256"]) == 64
+
+
+def test_yfinance_fast_fails_on_empty_data(tmp_path: Path):
+    """Verify YFinanceSource probe check raises FileNotFoundError immediately when anchor ticker has no data."""
+    dest_dir = tmp_path / "bronze" / "trade_date=2024-10-10"
+    yf_source = YFinanceSource()
+
+    empty_df = pd.DataFrame()
+
+    with patch("yfinance.Ticker") as mock_ticker_cls:
+        mock_instance = MagicMock()
+        mock_instance.history.return_value = empty_df
+        mock_ticker_cls.return_value = mock_instance
+
+        with pytest.raises(FileNotFoundError, match="No yfinance data returned"):
+            yf_source.fetch(date(2024, 10, 10), dest_dir)
+
+        # Crucial: verify that it failed fast on the anchor ticker without querying all 51 symbols
+        assert mock_instance.history.call_count == 1

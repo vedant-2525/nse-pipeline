@@ -59,6 +59,26 @@ class YFinanceSource(BhavcopySource):
             start_str,
         )
 
+        # Fast probe check: test anchor ticker (first symbol, typically RELIANCE) to fail fast on no data
+        anchor_sym = symbols[0]
+        anchor_ticker_sym = f"{anchor_sym}.NS"
+        try:
+            anchor_ticker = yf.Ticker(anchor_ticker_sym)
+            anchor_hist = anchor_ticker.history(start=start_str, end=end_str, auto_adjust=False)
+            if anchor_hist.empty:
+                logger.info(
+                    "Anchor ticker %s returned no data for %s; skipping remaining symbols and failing fast.",
+                    anchor_ticker_sym,
+                    trade_date,
+                )
+                raise FileNotFoundError(
+                    f"No yfinance data returned for {trade_date} (anchor ticker {anchor_ticker_sym} empty)."
+                )
+        except FileNotFoundError:
+            raise
+        except Exception as e:
+            logger.debug("Anchor ticker probe check encountered error: %s", e)
+
         rows = []
         for symbol in symbols:
             ticker_sym = f"{symbol}.NS"

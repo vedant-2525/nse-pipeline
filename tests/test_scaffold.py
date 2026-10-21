@@ -29,7 +29,7 @@ def test_settings_yaml_valid():
 
 
 def test_symbols_yaml_valid():
-    """Verify symbols.yaml exists and contains at least 50 equity symbols."""
+    """Verify symbols.yaml exists, has no duplicates, and contains expected symbols."""
     symbols_path = Path("config/symbols.yaml")
     assert symbols_path.is_file(), "config/symbols.yaml must exist"
 
@@ -40,6 +40,10 @@ def test_symbols_yaml_valid():
     symbols = data["symbols"]
     assert isinstance(symbols, list)
     assert len(symbols) >= 50
+    # Enforce uniqueness (no duplicates)
+    assert len(symbols) == len(set(symbols)), (
+        "config/symbols.yaml must contain no duplicate entries"
+    )
     assert "RELIANCE" in symbols
     assert "TCS" in symbols
 
@@ -57,6 +61,13 @@ def test_sectors_csv_valid():
     assert len(rows) >= 50
     symbols_in_sectors = {r["symbol"] for r in rows}
     assert "RELIANCE" in symbols_in_sectors
+
+    # Every symbol in config/symbols.yaml must have an entry in config/sectors.csv
+    symbols_path = Path("config/symbols.yaml")
+    with open(symbols_path, encoding="utf-8") as f:
+        symbols_config = yaml.safe_load(f).get("symbols", [])
+    missing = set(symbols_config) - symbols_in_sectors
+    assert not missing, f"Symbols in symbols.yaml missing from sectors.csv: {missing}"
 
 
 def test_holidays_csv_valid():
