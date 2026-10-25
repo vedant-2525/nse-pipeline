@@ -53,6 +53,8 @@ def test_validate_partition_metadata_success(tmp_path: Path):
         "rejected": 0,
         "deduped": 0,
         "row_count": 51,
+        "universe": "default_list",
+        "symbol_count": 51,
         "source_format": "udiff",
         "source_type": "official",
     }
@@ -61,6 +63,80 @@ def test_validate_partition_metadata_success(tmp_path: Path):
     meta = validate_partition_metadata(p_dir, trade_date=date(2024, 10, 11), allow_fallback=False)
     assert meta["row_count"] == 51
     assert meta["source_type"] == "official"
+    assert meta["universe"] == "default_list"
+    assert meta["symbol_count"] == 51
+
+
+def test_validate_partition_metadata_missing_universe_raises(tmp_path: Path):
+    """Verify partition with missing 'universe' field raises PartitionValidationError."""
+    p_dir = tmp_path / "trade_date=2024-10-11"
+    p_dir.mkdir()
+    meta_content = {
+        "trade_date": "2024-10-11",
+        "read_count": 2852,
+        "non_equity_filtered": 959,
+        "universe_filtered": 1842,
+        "rejected": 0,
+        "deduped": 0,
+        "row_count": 51,
+        "source_format": "udiff",
+        "source_type": "official",
+    }
+    (p_dir / "_SUCCESS.meta.json").write_text(json.dumps(meta_content), encoding="utf-8")
+
+    with pytest.raises(PartitionValidationError, match="missing the 'universe' field"):
+        validate_partition_metadata(p_dir, trade_date=date(2024, 10, 11))
+
+
+def test_validate_partition_metadata_all_eq_refused_without_flag(tmp_path: Path):
+    """Verify partition with universe='all_eq' is refused when include_all_symbols=False."""
+    p_dir = tmp_path / "trade_date=2024-10-11"
+    p_dir.mkdir()
+    meta_content = {
+        "trade_date": "2024-10-11",
+        "read_count": 2852,
+        "non_equity_filtered": 959,
+        "universe_filtered": 0,
+        "rejected": 0,
+        "deduped": 0,
+        "row_count": 1893,
+        "universe": "all_eq",
+        "symbol_count": 1893,
+        "source_format": "udiff",
+        "source_type": "official",
+    }
+    (p_dir / "_SUCCESS.meta.json").write_text(json.dumps(meta_content), encoding="utf-8")
+
+    with pytest.raises(PermissionError, match="refuses full market loads"):
+        validate_partition_metadata(
+            p_dir, trade_date=date(2024, 10, 11), include_all_symbols=False
+        )
+
+
+def test_validate_partition_metadata_all_eq_permitted_with_flag(tmp_path: Path):
+    """Verify partition with universe='all_eq' is accepted when include_all_symbols=True."""
+    p_dir = tmp_path / "trade_date=2024-10-11"
+    p_dir.mkdir()
+    meta_content = {
+        "trade_date": "2024-10-11",
+        "read_count": 2852,
+        "non_equity_filtered": 959,
+        "universe_filtered": 0,
+        "rejected": 0,
+        "deduped": 0,
+        "row_count": 1893,
+        "universe": "all_eq",
+        "symbol_count": 1893,
+        "source_format": "udiff",
+        "source_type": "official",
+    }
+    (p_dir / "_SUCCESS.meta.json").write_text(json.dumps(meta_content), encoding="utf-8")
+
+    meta = validate_partition_metadata(
+        p_dir, trade_date=date(2024, 10, 11), include_all_symbols=True
+    )
+    assert meta["universe"] == "all_eq"
+    assert meta["symbol_count"] == 1893
 
 
 def test_validate_partition_metadata_missing_dir(tmp_path: Path):
@@ -86,6 +162,8 @@ def test_validate_partition_metadata_missing_fields(tmp_path: Path):
         "trade_date": "2024-10-11",
         "read_count": 2852,
         "row_count": 51,
+        "universe": "default_list",
+        "symbol_count": 51,
         "source_type": "official",
     }
     (p_dir / "_SUCCESS.meta.json").write_text(json.dumps(incomplete_meta), encoding="utf-8")
@@ -106,6 +184,8 @@ def test_validate_partition_metadata_imbalanced(tmp_path: Path):
         "rejected": 0,
         "deduped": 0,
         "row_count": 50,  # 959 + 1842 + 50 = 2851 != 2852
+        "universe": "default_list",
+        "symbol_count": 51,
         "source_format": "udiff",
         "source_type": "official",
     }
@@ -127,6 +207,8 @@ def test_validate_partition_metadata_refuses_fallback_without_flag(tmp_path: Pat
         "rejected": 0,
         "deduped": 0,
         "row_count": 50,
+        "universe": "default_list",
+        "symbol_count": 50,
         "source_format": "yfinance",
         "source_type": "fallback",
     }
@@ -148,6 +230,8 @@ def test_validate_partition_metadata_permits_fallback_with_flag(tmp_path: Path):
         "rejected": 0,
         "deduped": 0,
         "row_count": 50,
+        "universe": "default_list",
+        "symbol_count": 50,
         "source_format": "yfinance",
         "source_type": "fallback",
     }
@@ -303,6 +387,8 @@ def test_load_rollback_on_failure_integration(tmp_path: Path):
         "rejected": 0,
         "deduped": 0,
         "row_count": 1,
+        "universe": "default_list",
+        "symbol_count": 1,
         "source_format": "udiff",
         "source_type": "official",
     }

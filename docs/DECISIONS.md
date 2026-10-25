@@ -229,3 +229,29 @@ Phase 3 requires ingesting cleaned Silver Parquet market data into a PostgreSQL 
 ### Trade-offs
 - PyArrow loads data into client memory before streaming COPY; for massive historical backfills, batching by date partition maintains low memory consumption (< 50 MB RAM).
 
+---
+
+## ADR 007: Universe Guard and Symbol Filtering Boundaries
+
+- **Date:** 2026-10-25
+- **Status:** Accepted
+
+### Context
+`transform --all-symbols` processes all ~1,800-1,900 cash equities in the market, while default `transform` filters down to the ~50 symbols configured in `config/symbols.yaml` (e.g. NIFTY 50). Because both wrote into the same partitioned directory layout (`data/silver/equity_prices/trade_date=YYYY-MM-DD/`), subsequent warehouse loads would ingest whichever dataset was produced last. This created ambiguity and risked loading full market data into a curated star schema inadvertently.
+
+### Decision
+1. **Explicit Universe Metadata**:
+   - `_SUCCESS.meta.json` records `universe` (`"default_list"` or `"all_eq"`) and `symbol_count`.
+2. **Pre-Load Universe Guard**:
+   - The warehouse loader actively inspects `universe`.
+   - If `universe == "all_eq"`, loading is refused with `PermissionError` unless `--include-all-symbols` is explicitly passed.
+   - Partitions lacking the `universe` field (older schema layout) are rejected with `PartitionValidationError`, directing the user to re-run the transformation.
+
+### Alternatives Considered
+- **Store all EQ rows in Silver & Gold and flag curated universe in `dim_symbol` (e.g. `is_nifty50` boolean):**
+  - *Why not chosen yet:* While architecturally sound for an enterprise-scale warehouse, storing all 1,900 equities across years of daily data expands storage 40x and increases local Spark transformation and PostgreSQL COPY runtimes during development iterations. Retaining explicit partitioning governance guarantees safety and predictable local performance, while documenting full-universe storage as an evolutionary step for Phase 5+.
+
+### Trade-offs
+- Switching between full-market and curated-universe analysis requires explicit transform re-runs or isolated silver directories, but prevents unexpected fact-table inflation and guarantees deterministic loading.
+
+

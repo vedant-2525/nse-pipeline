@@ -33,13 +33,15 @@ def validate_partition_metadata(
     partition_dir: Path,
     trade_date: date,
     allow_fallback: bool = False,
+    include_all_symbols: bool = False,
 ) -> dict[str, Any]:
     """Inspects and validates _SUCCESS.meta.json before loading into warehouse.
 
     Raises:
         FileNotFoundError: If partition directory or _SUCCESS.meta.json is missing.
-        PermissionError: If partition source is fallback and allow_fallback=False.
-        PartitionValidationError: If reconciliation fields are missing or imbalanced.
+        PermissionError: If partition source is fallback and allow_fallback=False, or if
+                         universe is 'all_eq' and include_all_symbols=False.
+        PartitionValidationError: If reconciliation fields or universe are missing or imbalanced.
     """
     if not partition_dir.is_dir():
         raise FileNotFoundError(f"Silver partition directory not found at: {partition_dir}")
@@ -62,7 +64,31 @@ def validate_partition_metadata(
             "To explicitly load fallback data, pass the flag: --allow-fallback"
         )
 
-    # 2. Required Reconciliation Fields Check
+    # 2. Universe Guard Check
+    if "universe" not in meta:
+        date_str = trade_date.strftime("%Y-%m-%d")
+        raise PartitionValidationError(
+            f"Silver partition metadata for {trade_date} is missing the 'universe' field (older schema layout). "
+            f"Please re-run the silver transformation: python -m nse_pipeline.cli transform --date {date_str}"
+        )
+
+    universe = meta.get("universe")
+    symbol_count = meta.get("symbol_count", "unknown")
+    logger.info(
+        "Silver partition universe: '%s' (symbols: %s) for date %s",
+        universe,
+        symbol_count,
+        trade_date,
+    )
+
+    if universe == "all_eq" and not include_all_symbols:
+        raise PermissionError(
+            f"Silver partition for {trade_date} contains full equity universe ('all_eq', {symbol_count} symbols).\n"
+            "By default, the warehouse refuses full market loads to maintain curated index consistency.\n"
+            "To explicitly load the full universe, re-run with the flag: --include-all-symbols"
+        )
+
+    # 3. Required Reconciliation Fields Check
     required_fields = [
         "read_count",
         "non_equity_filtered",
@@ -158,6 +184,7 @@ def load_silver_partition(
     trade_date: date,
     silver_base_dir: Path | str = "data/silver/equity_prices",
     allow_fallback: bool = False,
+    include_all_symbols: bool = False,
     conn: psycopg.Connection | None = None,
 ) -> dict[str, Any]:
     """Loads a single Silver date partition into PostgreSQL Gold Fact Table atomically.
@@ -176,7 +203,12 @@ def load_silver_partition(
 
     # 1. Validate partition metadata before attempting database operations
     try:
-        meta = validate_partition_metadata(partition_dir, trade_date, allow_fallback=allow_fallback)
+        meta = validate_partition_metadata(
+            partition_dir,
+            trade_date,
+            allow_fallback=allow_fallback,
+            include_all_symbols=include_all_symbols,
+        )
         source_type = meta["source_type"]
         log_dq_result(
             run_id=run_id,

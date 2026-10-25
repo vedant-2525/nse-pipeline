@@ -265,6 +265,10 @@ def test_run_silver_transform_end_to_end_and_idempotency(
     with open(success_meta_file, encoding="utf-8") as f:
         meta_data = json.load(f)
     assert meta_data["row_count"] == metrics1["kept_count"]
+    assert "universe" in meta_data
+    assert "symbol_count" in meta_data
+    assert meta_data["universe"] == "all_eq"
+    assert meta_data["symbol_count"] == metrics1["kept_count"]
 
     # Run 2 (Idempotency assertion)
     metrics2 = run_silver_transform(

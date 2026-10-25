@@ -204,6 +204,7 @@ def handle_load(args: argparse.Namespace) -> int:
                 trade_date=dt,
                 silver_base_dir=args.silver_dir,
                 allow_fallback=args.allow_fallback,
+                include_all_symbols=getattr(args, "include_all_symbols", False),
             )
             print(
                 f"Load Success [{dt}]: RowsIn={metrics['rows_in']} | "
@@ -363,6 +364,11 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-fallback",
         action="store_true",
         help="Permit loading fallback (yfinance) partition into warehouse",
+    )
+    load_parser.add_argument(
+        "--include-all-symbols",
+        action="store_true",
+        help="Permit loading Silver partitions generated with --all-symbols ('all_eq' universe)",
     )
 
     # 4. Database management command (Phase 3)

@@ -263,6 +263,9 @@ def run_silver_transform(
 
     duration = round(time.time() - start_time, 2)
 
+    universe_type = "default_list" if symbol_universe is not None else "all_eq"
+    symbol_count_val = len(symbol_universe) if symbol_universe is not None else row_count
+
     # 12. Write _SUCCESS-style partition metadata JSON inside partition folder
     success_meta = {
         "trade_date": date_str,
@@ -272,6 +275,8 @@ def run_silver_transform(
         "rejected": quarantine_count,
         "deduped": deduped_count,
         "row_count": row_count,
+        "universe": universe_type,
+        "symbol_count": symbol_count_val,
         "source_file": raw_file.name,
         "source_format": source_format,
         "source_type": source_type,
@@ -293,6 +298,8 @@ def run_silver_transform(
         "deduped_count": deduped_count,
         "row_count": row_count,
         "kept_count": row_count,
+        "universe": universe_type,
+        "symbol_count": symbol_count_val,
         "source_format": source_format,
         "source_type": source_type,
         "duration_seconds": duration,
