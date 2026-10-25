@@ -13,6 +13,14 @@ import yaml
 from nse_pipeline.ingest.downloader import BhavcopyDownloader
 from nse_pipeline.ingest.nse_source import NseSource
 from nse_pipeline.ingest.yfinance_source import YFinanceSource
+from nse_pipeline.load.db import (
+    apply_sql_migrations,
+    get_db_connection,
+    is_postgres_reachable,
+    populate_dim_date,
+    seed_dim_symbols,
+)
+from nse_pipeline.load.loader import load_silver_partition
 from nse_pipeline.transform.run_silver import run_silver_transform
 from nse_pipeline.utils.calendar import get_trading_days, is_trading_day
 from nse_pipeline.utils.logging import logger
@@ -125,6 +133,87 @@ def handle_transform(args: argparse.Namespace) -> int:
                 break
     finally:
         stop_spark_session()
+
+    return 1 if has_error else 0
+
+
+def handle_db(args: argparse.Namespace) -> int:
+    """Handles the 'db' CLI command (e.g. 'db init')."""
+    if getattr(args, "db_action", None) != "init":
+        print("Usage: python -m nse_pipeline.cli db init", file=sys.stderr)
+        return 1
+
+    if not is_postgres_reachable():
+        print(
+            "Error: PostgreSQL warehouse is not reachable.\n"
+            "Action required: Ensure Docker Desktop is running and start the container:\n"
+            "  docker compose up -d\n"
+            "Then re-run: python -m nse_pipeline.cli db init",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        with get_db_connection(autocommit=True) as conn:
+            applied = apply_sql_migrations(conn)
+            print(f"Applied {len(applied)} SQL migration files: {', '.join(applied)}")
+            symbols_count = seed_dim_symbols(conn)
+            print(f"Seeded {symbols_count} symbols into gold.dim_symbol.")
+            dates_count = populate_dim_date(conn)
+            print(f"Populated {dates_count} dates into gold.dim_date (2020 to 2030).")
+
+        print("Warehouse initialized successfully.")
+        return 0
+    except Exception as e:
+        logger.error("Database initialization failed: %s", e)
+        print(f"Database Initialization Error: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_load(args: argparse.Namespace) -> int:
+    """Handles the 'load' CLI command (Silver Parquet -> Gold Fact Table)."""
+    dates_to_run: list[date] = []
+
+    if args.date:
+        dates_to_run = [args.date]
+    elif args.from_date and args.to_date:
+        if args.from_date > args.to_date:
+            print("Error: --from date cannot be later than --to date.", file=sys.stderr)
+            return 1
+        dates_to_run = get_trading_days(args.from_date, args.to_date)
+    else:
+        print("Error: Either --date or both --from and --to must be specified.", file=sys.stderr)
+        return 1
+
+    if not is_postgres_reachable():
+        print(
+            "Error: PostgreSQL warehouse is not reachable.\n"
+            "Action required: Start the database container via: docker compose up -d",
+            file=sys.stderr,
+        )
+        return 1
+
+    has_error = False
+    for dt in dates_to_run:
+        if not is_trading_day(dt):
+            print(f"Skipped: {dt} is not an official NSE trading day (holiday/weekend).")
+            continue
+
+        try:
+            metrics = load_silver_partition(
+                trade_date=dt,
+                silver_base_dir=args.silver_dir,
+                allow_fallback=args.allow_fallback,
+            )
+            print(
+                f"Load Success [{dt}]: RowsIn={metrics['rows_in']} | "
+                f"RowsOut={metrics['rows_out']} | Duration={metrics['duration_seconds']}s"
+            )
+        except Exception as e:
+            logger.error("Warehouse load failed for date %s: %s", dt, e)
+            print(f"Load Error [{dt}]: {e}", file=sys.stderr)
+            has_error = True
+            break
 
     return 1 if has_error else 0
 
@@ -244,7 +333,46 @@ def main(argv: list[str] | None = None) -> int:
         help="Permit processing fallback (yfinance) files when official NSE files are missing",
     )
 
-    # 3. Run command (runs pipeline end-to-end for one date)
+    # 3. Load command (Phase 3)
+    load_parser = subparsers.add_parser(
+        "load", help="Load clean Silver Parquet data into Gold warehouse"
+    )
+    load_parser.add_argument(
+        "--date",
+        type=parse_date,
+        help="Single trading date in YYYY-MM-DD format",
+    )
+    load_parser.add_argument(
+        "--from",
+        dest="from_date",
+        type=parse_date,
+        help="Start date in YYYY-MM-DD format for range processing",
+    )
+    load_parser.add_argument(
+        "--to",
+        dest="to_date",
+        type=parse_date,
+        help="End date in YYYY-MM-DD format for range processing",
+    )
+    load_parser.add_argument(
+        "--silver-dir",
+        default="data/silver/equity_prices",
+        help="Base directory containing Silver Parquet partitions",
+    )
+    load_parser.add_argument(
+        "--allow-fallback",
+        action="store_true",
+        help="Permit loading fallback (yfinance) partition into warehouse",
+    )
+
+    # 4. Database management command (Phase 3)
+    db_parser = subparsers.add_parser("db", help="Database management commands")
+    db_subparsers = db_parser.add_subparsers(dest="db_action", help="DB actions")
+    db_subparsers.add_parser(
+        "init", help="Apply SQL schemas and seed dimensions (dim_symbol, dim_date)"
+    )
+
+    # 5. Run command (runs pipeline end-to-end for one date)
     run_parser = subparsers.add_parser("run", help="Run end-to-end pipeline stages for a date")
     run_parser.add_argument(
         "--date",
@@ -264,6 +392,10 @@ def main(argv: list[str] | None = None) -> int:
         return handle_ingest(args)
     elif args.command == "transform":
         return handle_transform(args)
+    elif args.command == "load":
+        return handle_load(args)
+    elif args.command == "db":
+        return handle_db(args)
     elif args.command == "run":
         return handle_run(args)
     else:
