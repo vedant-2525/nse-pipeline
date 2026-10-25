@@ -107,4 +107,45 @@ A companion study guide for interviews, explaining the concepts, design rational
 5. **Q: How does PySpark handle Windows local execution differences?**
    *Answer:* Windows requires native Hadoop binaries (`winutils.exe` and `hadoop.dll`) because Spark uses Hadoop's FileUtil class to manage file permissions and temporary directories. Without `HADOOP_HOME` and `winutils.exe`, Spark operations like Parquet writes or shuffle spilling fail with `UnsatisfiedLinkError` or `NullPointerException`.
 
+---
+
+## Phase 3: Dimensional Modeling, PostgreSQL Star Schema & Atomic Loaders
+
+### Concepts Used
+1. **Dimensional Modeling (Kimball Star Schema):**
+   - **Fact Table (`gold.fact_daily_price`):** Stores quantitative daily market measurements (prices, volume, turnover, trade count) at the grain of one row per symbol per trading day.
+   - **Dimension Tables (`gold.dim_symbol`, `gold.dim_date`):** Store descriptive business context (company name, sector, ISIN, calendar attributes).
+   - Star schemas minimize JOIN depth, enable fast aggregations, and allow business intelligence tools to slice metrics by sector or time hierarchy easily.
+2. **Surrogate Keys vs Natural Keys:**
+   - `dim_symbol` uses an integer surrogate key (`symbol_id`). While NSE tickers change due to corporate actions or mergers, the surrogate key guarantees immutable referential integrity in fact tables.
+   - `dim_date` uses an integer smart key `date_id` formatted as `YYYYMMDD` (e.g. `20241011`), enabling partition pruning and readable integer JOINs without date parsing overhead.
+3. **The Staging Table + Atomic Upsert Pattern (ELT):**
+   - High-throughput loaders stream records directly into a temporary staging table (`staging_price`) using PostgreSQL's binary `COPY` protocol (`psycopg 3`'s `cursor.copy()`).
+   - A single set-based SQL statement (`INSERT ... SELECT ... ON CONFLICT (symbol_id, date_id) DO UPDATE`) joins staging with dimensions and upserts into the fact table.
+   - This approach is 50x–100x faster than row-by-row ORM updates and guarantees idempotency.
+4. **ACID Transaction Boundaries & Failure Isolation:**
+   - The entire staging, dimension resolution, and fact upsert sequence executes in a single database transaction (`with conn.transaction():`).
+   - If a database constraint fails (e.g., negative volume or `high < low`), the entire transaction rolls back automatically, leaving the fact table completely uncorrupted.
+   - Operational logs (`ops.pipeline_run_log`, `ops.dq_results`) are committed via an independent connection/transaction, ensuring failed execution attempts are preserved for auditability.
+5. **Decoupling Data Processing from Warehouse Loading:**
+   - Spark is ideal for heavy transformations, but loading daily partitions (51 to 1,900 rows) into PostgreSQL does not require a JVM.
+   - Using `pyarrow` to read Parquet in memory and `psycopg 3` to stream COPY directly to PostgreSQL provides sub-second execution (0.1s per day) with zero Spark overhead.
+
+### Why This Design?
+- **Idempotency in Data Warehouses:** Running a backfill or re-running a failed date partition multiple times must produce the exact same final state. Using `ON CONFLICT (symbol_id, date_id) DO UPDATE` ensures facts are safely updated in-place without generating duplicate entries.
+- **Data Quality as Database Invariants:** In addition to Spark application-level checks, enforcing `CHECK (high >= low)`, `CHECK (prices > 0)`, and `CHECK (volume >= 0)` at the database DDL level acts as a final defense against corrupted data entering analytical views.
+
+### Common Interview Questions
+1. **Q: Why use a staging table before loading into a dimensional fact table?**
+   *Answer:* Staging tables allow fast, unindexed bulk loading via PostgreSQL `COPY` without triggering index or foreign key overhead on every incoming row. Once staging is complete, a single set-based SQL statement performs dimension lookups and upserts into the production fact table inside an atomic transaction.
+2. **Q: What is the difference between Star Schema and Snowflake Schema?**
+   *Answer:* In a Star Schema, dimension tables are denormalized (e.g. company name and sector live in `dim_symbol`), minimizing query JOINs for high-speed analytical queries. In a Snowflake Schema, dimensions are normalized into separate sub-tables (e.g. `dim_sector` joined to `dim_symbol`), reducing redundancy at the cost of complex multi-table JOINs. Star schemas are preferred for modern OLAP workloads.
+3. **Q: How do you guarantee idempotency when loading data into a relational warehouse?**
+   *Answer:* By establishing a composite primary key on the fact table grain (e.g. `(symbol_id, date_id)`) and executing upsert statements (`INSERT ... ON CONFLICT DO UPDATE`). Re-running a pipeline replaces existing values with new values instead of appending duplicate records.
+4. **Q: Why separate operational audit logging from the data loading transaction?**
+   *Answer:* If operational logs were written inside the same transaction as data changes, a data failure rolling back the transaction would also erase the error log, destroying pipeline observability. Committing execution status and data quality metrics on an independent connection ensures failures are permanently recorded.
+5. **Q: Why choose PyArrow over PySpark for the warehouse loading step?**
+   *Answer:* Daily batch loads in equity market pipelines are typically small (under 2,000 rows, < 2 MB). PySpark carries a multi-second JVM startup cost and requires executor coordination. PyArrow reads Parquet files into memory in milliseconds with zero dependencies, making the loader lightweight, fast, and simple to run in lightweight containers.
+
+
 

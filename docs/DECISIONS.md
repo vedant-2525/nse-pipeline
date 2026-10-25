@@ -188,3 +188,44 @@ Code review of Phase 2 revealed critical operational issues:
 ### Trade-offs
 - Writing to the base path requires explicit directory isolation during unit tests (`tmp_path`), but standardizes the lake architecture.
 
+---
+
+## ADR 006: PostgreSQL Dimensional Star Schema, PyArrow Loader, and Atomic Upsert Boundaries (Phase 3)
+
+- **Date:** 2026-10-25
+- **Status:** Accepted
+
+### Context
+Phase 3 requires ingesting cleaned Silver Parquet market data into a PostgreSQL relational warehouse for fast downstream querying, financial window analytics, and business reporting. The design must guarantee data integrity, zero partial writes, idempotency (re-running a date must not duplicate facts), and operational traceability.
+
+### Decision
+1. **Dimensional Star-Schema Architecture:**
+   - **`gold.dim_symbol`**: Surrogate key `symbol_id`, unique ticker `symbol`, `isin`, company name, and sector (seeded from `config/sectors.csv` and auto-extended upon encountering new equities).
+   - **`gold.dim_date`**: Integer key `date_id` (e.g. `20241011`), calendar attributes (year, quarter, month, day of week, day name, `is_weekend`, `is_holiday`, `is_trading_day`). Populated for 2020-01-01 to 2030-12-31.
+   - **`gold.fact_daily_price`**: Primary key `(symbol_id, date_id)`, foreign keys to dimensions, `NUMERIC(18, 4)` prices, `NUMERIC(22, 2)` turnover in INR, `BIGINT` volume and trades, source metadata, and check constraints (`high >= low`, prices > 0, volume >= 0).
+   - **`ops.pipeline_run_log`** & **`ops.dq_results`**: Operational audit tables tracking run status, row throughput, error messages, and gate validation details.
+2. **PyArrow In-Memory Reader instead of PySpark for Loading:**
+   - Daily Silver partitions range from 51 rows (~50 KB) to ~1,900 rows (~1.5 MB).
+   - PyArrow reads Parquet partitions in milliseconds with minimal memory footprint and zero JVM startup overhead, decoupling the warehouse loading process from Apache Spark.
+3. **Staging Pattern + Atomic Upsert in a Single Transaction:**
+   - Silver rows are loaded into a temporary table (`staging_price`) using `psycopg 3`'s streaming `COPY` protocol (`cursor.copy()`).
+   - Unknown symbols are dynamically inserted into `gold.dim_symbol`.
+   - Facts are inserted into `gold.fact_daily_price` using `ON CONFLICT (symbol_id, date_id) DO UPDATE`.
+   - All steps execute inside a single transaction (`with conn.transaction():`). If an error or constraint violation occurs mid-load, the entire transaction rolls back cleanly, leaving the fact table untouched.
+4. **Independent Operational Logging:**
+   - Operational logs (`ops.pipeline_run_log`, `ops.dq_results`) are committed via an independent connection/transaction, ensuring that execution failures are permanently logged even when the core data transaction rolls back.
+5. **Pre-Load Metadata & Governance Gating:**
+   - Before executing SQL operations, the loader inspects `_SUCCESS.meta.json`.
+   - If `source_type != 'official'` and `--allow-fallback` is absent, loading is refused with `PermissionError`.
+   - If row-count reconciliation fields are missing or imbalanced, loading is aborted with `PartitionValidationError`.
+6. **Holiday Coverage & Date Dimension Behavior:**
+   - `config/holidays.csv` contains verified NSE trading holidays for calendar years 2024 and 2025.
+   - For dates outside 2024-2025, holiday dates are not invented; `is_holiday` evaluates to `False`, and `is_trading_day` treats all non-weekend weekdays as trading days under "weekday, holiday data unavailable" semantics.
+
+### Alternatives Considered
+- *Using SQLAlchemy ORM:* Rejected in favor of native `psycopg 3` streaming COPY. ORM row insertion incurs substantial CPU and serialization overhead compared to bulk COPY + set-based SQL upserts.
+- *Loading directly with PySpark JDBC:* Rejected because JVM JDBC writers require Spark executor coordination and lack fine-grained single-transaction DDL/staging control.
+
+### Trade-offs
+- PyArrow loads data into client memory before streaming COPY; for massive historical backfills, batching by date partition maintains low memory consumption (< 50 MB RAM).
+

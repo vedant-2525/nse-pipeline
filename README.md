@@ -140,23 +140,39 @@ python -m nse_pipeline.cli transform --date 2024-10-11 --allow-fallback
 > `config/symbols.yaml` contains 51 equity symbols as a fixed convenience approximation reflecting Nifty 50 constituents around September 2024 (including BEL, TRENT, and LTIM). It is not a point-in-time constituent index; real historical backtesting requires per-date constituent tracking.
 > Passing `--all-symbols` processes all Cash Market Equities (Segment `CM`, Instrument `STK`, Series `EQ`) across the exchange (~1,800 to 1,900 symbols daily); non-equity series (`BE`, `BZ`, `GB`, `GS`, `TB`, debt) are excluded by design.
 
+#### Phase 3: PostgreSQL Warehouse & Loading (Gold Layer)
+```powershell
+# 1. Start the PostgreSQL 16 container
+docker compose up -d
+
+# 2. Initialize database schemas (gold, ops) and seed dimensions (dim_symbol, dim_date)
+python -m nse_pipeline.cli db init
+
+# 3. Load single silver partition into gold fact table
+python -m nse_pipeline.cli load --date 2024-10-11
+
+# 4. Load date range (skips weekends and holidays automatically)
+python -m nse_pipeline.cli load --from 2024-10-01 --to 2024-10-15
+
+# 5. Load partition with fallback source explicitly permitted
+python -m nse_pipeline.cli load --date 2024-10-11 --allow-fallback
+```
+
 ### 5. Running Linting and Tests
 
-- **Using PowerShell (Windows):**
+- **Running Offline Unit Tests (No Database or Internet Required):**
   ```powershell
-  .\scripts\tasks.ps1 lint
-  .\scripts\tasks.ps1 test
+  .\.venv\Scripts\pytest.exe
   ```
-- **Using Make (Linux/macOS/WSL):**
-  ```bash
-  make lint
-  make test
+- **Running Integration Tests against PostgreSQL Container:**
+  ```powershell
+  docker compose up -d
+  .\.venv\Scripts\pytest.exe tests/test_loader.py -k integration
   ```
-- **Direct CLI:**
-  ```bash
-  ruff check .
-  ruff format --check .
-  pytest
+- **Linting & Code Formatting:**
+  ```powershell
+  .\.venv\Scripts\ruff.exe check .
+  .\.venv\Scripts\ruff.exe format --check .
   ```
 
 ---
@@ -206,6 +222,28 @@ python -m nse_pipeline.cli transform --date 2024-10-11 --allow-fallback
 
 ---
 
+## Warehouse Star-Schema Architecture
+
+```text
+         [gold.dim_symbol]                        [gold.dim_date]
+         ├── symbol_id (PK, SERIAL)               ├── date_id (PK, INT YYYYMMDD)
+         ├── symbol (VARCHAR UNIQUE)              ├── date (DATE UNIQUE)
+         ├── isin (VARCHAR)                       ├── year, quarter, month
+         ├── company_name (VARCHAR)               ├── day_of_week, day_name
+         └── sector (VARCHAR)                     └── is_weekend, is_holiday, is_trading_day
+                     │                                         │
+                     │  ┌───────────────────────────────────┐  │
+                     └──┤      gold.fact_daily_price        ├──┘
+                        ├── symbol_id (FK)                  │
+                        ├── date_id (FK)                    │
+                        │   (PK: symbol_id, date_id)        │
+                        ├── open, high, low, close, last    │
+                        ├── prev_close, volume, turnover    │
+                        └── trades, source_format, source_type
+```
+
+---
+
 ## Repository Structure
 
 ```text
@@ -237,7 +275,7 @@ python -m nse_pipeline.cli transform --date 2024-10-11 --allow-fallback
 - [x] **Phase 0: Scaffold** - Repository structure, config files, CI skeleton, ruff/pytest setup, and ADRs.
 - [x] **Phase 1: Ingest** - `BhavcopySource` interface, official NSE source with fallback to `yfinance`, retry mechanism.
 - [x] **Phase 2: Transform (PySpark)** - Canonical schema mapping, cleaning, date-partitioned Parquet generation.
-- [ ] **Phase 3: Warehouse & Load** - Star schema DDL, idempotent Postgres loader, pipeline run logging.
+- [x] **Phase 3: Warehouse & Load** - Star schema DDL, idempotent Postgres loader, pipeline run logging.
 - [ ] **Phase 4: Analytics Views** - Moving averages, rolling volatility, top movers, sector returns.
 - [ ] **Phase 5: Data Quality** - Stop-the-line validation gates and ops metadata logging.
 - [ ] **Phase 6: Airflow Orchestration** - Daily scheduled DAG and backfill DAG with holiday skipping.
