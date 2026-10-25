@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 from nse_pipeline.utils.calendar import (
+    check_holiday_coverage,
     get_holidays,
     get_previous_trading_day,
     get_trading_days,
@@ -94,3 +95,19 @@ def test_get_trading_days_range(tmp_path: Path):
         date(2024, 10, 3),
         date(2024, 10, 4),
     ]
+
+
+def test_check_holiday_coverage_warning(capsys):
+    """Verify warning is emitted when requested date's year is missing from holidays.csv."""
+    # 2024 is covered in config/holidays.csv
+    missing = check_holiday_coverage(date(2024, 10, 11))
+    assert missing == []
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.err
+
+    # 2026 has no entries in config/holidays.csv
+    missing_2026 = check_holiday_coverage(date(2026, 1, 15))
+    assert missing_2026 == [2026]
+    captured_2026 = capsys.readouterr()
+    assert "WARNING: Year 2026 has no holiday entries" in captured_2026.err
+    assert "treated as active trading days" in captured_2026.err

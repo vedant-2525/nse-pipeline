@@ -6,8 +6,11 @@ without requiring code deployments.
 """
 
 import csv
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from nse_pipeline.utils.logging import logger
 
 _HOLIDAY_CACHE: dict[str, set[date]] = {}
 
@@ -85,3 +88,37 @@ def get_trading_days(
             days.append(current)
         current += timedelta(days=1)
     return days
+
+
+def check_holiday_coverage(
+    target_dates: date | list[date] | int,
+    holidays_path: Path | str = "config/holidays.csv",
+) -> list[int]:
+    """Checks whether the years of the given dates have holiday entries in config/holidays.csv.
+
+    If any year has no entries, logs and prints a clear WARNING stating which year is missing
+    and that holidays for that year are treated as trading days.
+
+    Returns:
+        List of missing years (empty if all years have holiday entries).
+    """
+    if isinstance(target_dates, int):
+        years = {target_dates}
+    elif isinstance(target_dates, date):
+        years = {target_dates.year}
+    else:
+        years = {d.year for d in target_dates}
+
+    holidays = get_holidays(holidays_path)
+    covered_years = {h.year for h in holidays}
+    missing_years = sorted(years - covered_years)
+
+    for y in missing_years:
+        warning_msg = (
+            f"WARNING: Year {y} has no holiday entries in {holidays_path}. "
+            f"All non-weekend days for {y} are treated as active trading days."
+        )
+        logger.warning(warning_msg)
+        print(warning_msg, file=sys.stderr)
+
+    return missing_years

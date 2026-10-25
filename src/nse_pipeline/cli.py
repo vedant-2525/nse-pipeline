@@ -22,7 +22,11 @@ from nse_pipeline.load.db import (
 )
 from nse_pipeline.load.loader import load_silver_partition
 from nse_pipeline.transform.run_silver import run_silver_transform
-from nse_pipeline.utils.calendar import get_trading_days, is_trading_day
+from nse_pipeline.utils.calendar import (
+    check_holiday_coverage,
+    get_trading_days,
+    is_trading_day,
+)
 from nse_pipeline.utils.logging import logger
 from nse_pipeline.utils.spark import stop_spark_session
 
@@ -53,6 +57,7 @@ def handle_ingest(args: argparse.Namespace) -> int:
     output_dir: Path = Path(args.output_dir)
     force: bool = args.force
 
+    check_holiday_coverage(target_date)
     logger.info("Executing ingest command for date: %s", target_date)
 
     primary = NseSource() if args.source in ("nse", "auto") else None
@@ -97,6 +102,8 @@ def handle_transform(args: argparse.Namespace) -> int:
     else:
         print("Error: Either --date or both --from and --to must be specified.", file=sys.stderr)
         return 1
+
+    check_holiday_coverage(dates_to_run or [args.from_date, args.to_date])
 
     symbols_filter = None if args.all_symbols else load_configured_symbols()
     allow_fallback: bool = args.allow_fallback
@@ -185,6 +192,8 @@ def handle_load(args: argparse.Namespace) -> int:
         print("Error: Either --date or both --from and --to must be specified.", file=sys.stderr)
         return 1
 
+    check_holiday_coverage(dates_to_run or [args.from_date, args.to_date])
+
     if not is_postgres_reachable():
         print(
             "Error: PostgreSQL warehouse is not reachable.\n"
@@ -222,6 +231,7 @@ def handle_load(args: argparse.Namespace) -> int:
 def handle_run(args: argparse.Namespace) -> int:
     """Handles the 'run' CLI subcommand to execute the pipeline for a single date."""
     target_date: date = args.date
+    check_holiday_coverage(target_date)
     logger.info("Starting pipeline execution for trade date: %s", target_date)
 
     if not is_trading_day(target_date) and not args.force:
