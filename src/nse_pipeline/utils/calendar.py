@@ -107,7 +107,7 @@ def check_holiday_coverage(
     elif isinstance(target_dates, date):
         years = {target_dates.year}
     else:
-        years = {d.year for d in target_dates}
+        years = {d if isinstance(d, int) else d.year for d in target_dates}
 
     holidays = get_holidays(holidays_path)
     covered_years = {h.year for h in holidays}

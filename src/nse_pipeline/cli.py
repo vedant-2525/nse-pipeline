@@ -262,6 +262,26 @@ def handle_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_backfill(args: argparse.Namespace) -> int:
+    """Handles the 'backfill' CLI command across a date range."""
+    from nse_pipeline.orchestration.backfill import run_backfill
+
+    if not args.from_date or not args.to_date:
+        print("Error: Both --from and --to dates must be specified for backfill.", file=sys.stderr)
+        return 1
+
+    exit_code, _ = run_backfill(
+        from_date=args.from_date,
+        to_date=args.to_date,
+        force=args.force,
+        bronze_dir=args.bronze_dir,
+        silver_dir=args.silver_dir,
+        quarantine_dir=args.quarantine_dir,
+        reports_dir=args.reports_dir,
+    )
+    return exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -402,6 +422,50 @@ def main(argv: list[str] | None = None) -> int:
         help="Force execution even if date is a holiday or files already exist",
     )
 
+    # 6. Backfill command (Phase 4)
+    backfill_parser = subparsers.add_parser(
+        "backfill", help="Run historical batch backfill across a date range"
+    )
+    backfill_parser.add_argument(
+        "--from",
+        dest="from_date",
+        type=parse_date,
+        required=True,
+        help="Start date in YYYY-MM-DD format",
+    )
+    backfill_parser.add_argument(
+        "--to",
+        dest="to_date",
+        type=parse_date,
+        required=True,
+        help="End date in YYYY-MM-DD format",
+    )
+    backfill_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-execute backfill even if data is already loaded in warehouse",
+    )
+    backfill_parser.add_argument(
+        "--bronze-dir",
+        default="data/bronze",
+        help="Path to Bronze storage base folder (default: data/bronze)",
+    )
+    backfill_parser.add_argument(
+        "--silver-dir",
+        default="data/silver/equity_prices",
+        help="Path to Silver storage folder (default: data/silver/equity_prices)",
+    )
+    backfill_parser.add_argument(
+        "--quarantine-dir",
+        default="data/quarantine/equity_prices",
+        help="Path to Quarantine storage folder (default: data/quarantine/equity_prices)",
+    )
+    backfill_parser.add_argument(
+        "--reports-dir",
+        default="data/reports",
+        help="Path to directory where backfill audit JSON reports are written (default: data/reports)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "ingest":
@@ -414,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_db(args)
     elif args.command == "run":
         return handle_run(args)
+    elif args.command == "backfill":
+        return handle_backfill(args)
     else:
         parser.print_help()
         return 0
