@@ -25,5 +25,12 @@ CREATE TABLE IF NOT EXISTS gold.fact_daily_price (
     CONSTRAINT chk_fact_volume_non_negative CHECK (volume >= 0)
 );
 
+-- Index on date_id for time-series queries (leading column of the PK is symbol_id,
+-- so date_id lookups need a separate index).
 CREATE INDEX IF NOT EXISTS idx_fact_daily_price_date_id ON gold.fact_daily_price(date_id);
-CREATE INDEX IF NOT EXISTS idx_fact_daily_price_symbol_id ON gold.fact_daily_price(symbol_id);
+
+-- NOTE: idx_fact_daily_price_symbol_id is intentionally NOT created here.
+-- The PRIMARY KEY (symbol_id, date_id) already creates a B-tree index with
+-- symbol_id as the leading column, making a separate single-column index on
+-- symbol_id entirely redundant (wastes storage, slows writes, gains nothing).
+DROP INDEX IF EXISTS gold.idx_fact_daily_price_symbol_id;

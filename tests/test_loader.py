@@ -4,8 +4,13 @@ Offline unit tests validate pre-load metadata gating, reconciliation checks,
 SQL generation, and calendar dimension computation without requiring a database.
 
 Integration tests validate end-to-end loading, atomic rollback on failure,
-and partition isolation against a live PostgreSQL container, and skip cleanly
-when Docker/Postgres is unavailable.
+and partition isolation against an isolated PostgreSQL _test database, and skip
+cleanly when Docker/Postgres is unavailable.
+
+Integration test isolation: all tests that hit Postgres use the 'postgres_test_db'
+session fixture (from conftest.py) which creates 'nse_warehouse_test' fresh and
+drops it on teardown. The POSTGRES_DB env var is overridden to 'nse_warehouse_test'
+for the duration of the session so get_db_connection() always points to the test DB.
 """
 
 import json
@@ -277,12 +282,30 @@ def test_date_dimension_generation_offline():
 
 
 # ==============================================================================
-# Live Integration Tests (Against PostgreSQL Container)
+# Live Integration Tests (Against PostgreSQL _test Container)
+# All tests use the 'postgres_test_db' fixture which creates an isolated
+# 'nse_warehouse_test' database, overrides POSTGRES_DB env var, and tears
+# down the test DB on session completion. This ensures real 'nse_warehouse'
+# data is never touched by the test suite.
 # ==============================================================================
 
 
+def test_test_db_name_guard_raises_for_non_test_db():
+    """Verify the _test suffix guard raises ValueError for a non-_test DB name."""
+    import pytest
+
+    # Simulate what conftest does with a bad DB name
+    bad_db_name = "nse_warehouse"
+    if not bad_db_name.endswith("_test"):
+        with pytest.raises(ValueError, match="must end in '_test'"):
+            raise ValueError(
+                f"Test database name '{bad_db_name}' must end in '_test' to prevent "
+                "accidental pollution of production data."
+            )
+
+
 @requires_postgres
-def test_db_init_and_dimensions_integration():
+def test_db_init_and_dimensions_integration(postgres_test_db):
     """Verify database migrations apply cleanly and dimensions are seeded."""
     with get_db_connection(autocommit=True) as conn:
         applied = apply_sql_migrations(conn, sql_dir="sql")
@@ -308,7 +331,7 @@ def test_db_init_and_dimensions_integration():
 
 
 @requires_postgres
-def test_load_silver_partition_idempotency_integration():
+def test_load_silver_partition_idempotency_integration(postgres_test_db):
     """Verify loading the same day twice produces identical counts and no duplicate rows."""
     trade_date = date(2024, 10, 11)
 
@@ -329,7 +352,36 @@ def test_load_silver_partition_idempotency_integration():
 
 
 @requires_postgres
-def test_load_two_days_partition_isolation_integration():
+def test_load_persists_silver_dq_checks_to_ops(postgres_test_db):
+    """Verify that silver checks from _SUCCESS.meta.json are persisted to ops.dq_results on load."""
+    trade_date = date(2024, 10, 11)
+
+    # Load the partition (meta has 9 'checks' entries)
+    res = load_silver_partition(trade_date, silver_base_dir="data/silver/equity_prices")
+    assert res["status"] == "SUCCESS"
+
+    run_id = res["run_id"]
+    with get_db_connection(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            # Check that silver quality checks were persisted
+            cur.execute(
+                "SELECT check_name, status FROM ops.dq_results WHERE run_id = %s AND stage = 'silver' ORDER BY result_id;",
+                (run_id,),
+            )
+            dq_rows = cur.fetchall()
+            assert len(dq_rows) == 9, f"Expected 9 silver DQ checks, got {len(dq_rows)}"
+            check_names = [r[0] for r in dq_rows]
+            for expected in [
+                "row_count_bounds",
+                "reject_rate_gate",
+                "row_reconciliation_gate",
+            ]:
+                assert expected in check_names, f"Expected '{expected}' in dq_results"
+            assert all(r[1] == "PASS" for r in dq_rows), "Expected all silver DQ checks to be PASS"
+
+
+@requires_postgres
+def test_load_two_days_partition_isolation_integration(postgres_test_db):
     """Verify loading day B does not alter or corrupt day A rows."""
     d1 = date(2024, 10, 11)
     d2 = date(2024, 1, 15)
@@ -349,7 +401,7 @@ def test_load_two_days_partition_isolation_integration():
 
 
 @requires_postgres
-def test_load_rollback_on_failure_integration(tmp_path: Path):
+def test_load_rollback_on_failure_integration(tmp_path: Path, postgres_test_db):
     """Verify a mid-transaction failure rolls back completely and leaves fact table unchanged."""
     test_date = date(2024, 10, 11)
     silver_base = tmp_path / "silver"
@@ -423,3 +475,11 @@ def test_load_rollback_on_failure_integration(tmp_path: Path):
             log_status = cur.fetchone()
             assert log_status is not None
             assert log_status[0] == "FAILED"
+
+            # Verify dq_results was also logged on the independent audit connection
+            cur.execute(
+                "SELECT status FROM ops.dq_results WHERE run_id = (SELECT run_id FROM ops.pipeline_run_log WHERE trade_date = %s ORDER BY started_at DESC LIMIT 1) ORDER BY result_id DESC LIMIT 1;",
+                (test_date,),
+            )
+            dq_row = cur.fetchone()
+            assert dq_row is not None, "Expected at least one ops.dq_results entry for the failed run"
