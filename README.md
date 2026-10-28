@@ -142,7 +142,7 @@ python -m nse_pipeline.cli transform --date 2024-10-11 --allow-fallback
 
 #### Phase 3: PostgreSQL Warehouse & Loading (Gold Layer)
 ```powershell
-# 1. Start the PostgreSQL 16 container
+# 1. Start the PostgreSQL 16 container (bound strictly to 127.0.0.1 for local isolation)
 docker compose up -d
 
 # 2. Initialize database schemas (gold, ops) and seed dimensions (dim_symbol, dim_date)
@@ -156,7 +156,24 @@ python -m nse_pipeline.cli load --from 2024-10-01 --to 2024-10-15
 
 # 5. Load partition with fallback source explicitly permitted
 python -m nse_pipeline.cli load --date 2024-10-11 --allow-fallback
+
+# 6. Load partition created with --all-symbols ('all_eq' universe)
+python -m nse_pipeline.cli load --date 2024-10-11 --include-all-symbols
 ```
+
+> [!TIP]
+> **Database Password Rotation (Without Losing Volume Data):**
+> PostgreSQL persistent volumes initialize credentials on first boot. If you need to rotate the database password:
+> 1. In the running container, alter the user password directly:
+>    ```bash
+>    docker exec -it nse_postgres psql -U postgres -c "ALTER USER postgres PASSWORD 'new_password';"
+>    ```
+> 2. Update `POSTGRES_PASSWORD=new_password` in your `.env` file.
+> 3. Restart the container without removing volumes:
+>    ```bash
+>    docker compose restart postgres
+>    ```
+> This preserves existing table data in the `postgres_data` volume while synchronizing client connection credentials.
 
 ### 5. Running Linting and Tests
 
