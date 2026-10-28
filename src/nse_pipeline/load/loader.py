@@ -180,6 +180,37 @@ def log_dq_result(
         logger.error("Failed to write to ops.dq_results: %s", e)
 
 
+def log_dq_results(
+    run_id: uuid.UUID,
+    results: list[dict[str, Any]],
+    default_stage: str = "silver",
+) -> None:
+    """Records multiple data quality check outcomes into ops.dq_results."""
+    if not results:
+        return
+    try:
+        with get_db_connection(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                for r in results:
+                    stage = r.get("stage", default_stage)
+                    name = r.get("name", r.get("check_name", "unknown"))
+                    status = (
+                        "PASS"
+                        if r.get("passed", True) and r.get("status", "PASS") == "PASS"
+                        else r.get("status", "FAIL")
+                    )
+                    details = r.get("details", "")
+                    cur.execute(
+                        """
+                        INSERT INTO ops.dq_results (run_id, stage, check_name, status, details)
+                        VALUES (%s, %s, %s, %s, %s);
+                        """,
+                        (run_id, stage, name, status, details),
+                    )
+    except Exception as e:
+        logger.error("Failed to write batch to ops.dq_results: %s", e)
+
+
 def load_silver_partition(
     trade_date: date,
     silver_base_dir: Path | str = "data/silver/equity_prices",
@@ -217,6 +248,11 @@ def load_silver_partition(
             status="PASS",
             details=f"Validated _SUCCESS.meta.json (source_type={source_type}, read={meta['read_count']})",
         )
+
+        # Record Silver quality check outcomes into ops.dq_results
+        silver_checks = meta.get("checks", [])
+        if silver_checks:
+            log_dq_results(run_id=run_id, results=silver_checks, default_stage="silver")
     except Exception as e:
         finished_at = datetime.now(UTC)
         log_pipeline_run(

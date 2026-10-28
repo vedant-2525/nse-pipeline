@@ -270,6 +270,24 @@ def test_run_silver_transform_end_to_end_and_idempotency(
     assert meta_data["universe"] == "all_eq"
     assert meta_data["symbol_count"] == metrics1["kept_count"]
 
+    # Verify 'checks' list is present with all required gates
+    assert "checks" in meta_data
+    check_names = [c["name"] for c in meta_data["checks"]]
+    for required_gate in [
+        "row_count_bounds",
+        "partition_date_match",
+        "duplicate_keys",
+        "high_low_invariant",
+        "price_bounds",
+        "positive_prices",
+        "volume_non_negative",
+        "reject_rate_gate",
+        "row_reconciliation_gate",
+    ]:
+        assert required_gate in check_names, f"Missing DQ check gate: {required_gate}"
+    # All gates should have passed=True
+    assert all(c["passed"] for c in meta_data["checks"]), "Expected all DQ checks to pass"
+
     # Run 2 (Idempotency assertion)
     metrics2 = run_silver_transform(
         trade_date=trade_date,

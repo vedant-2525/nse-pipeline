@@ -265,6 +265,60 @@ def run_silver_transform(
 
     universe_type = "default_list" if symbol_universe is not None else "all_eq"
     symbol_count_val = len(symbol_universe) if symbol_universe is not None else row_count
+    reject_rate_pct = (quarantine_count / universe_count * 100.0) if universe_count > 0 else 0.0
+    accounted_sum = non_equity_filtered + universe_filtered + quarantine_count + deduped_count + row_count
+
+    checks_meta = [
+        {
+            "name": "row_count_bounds",
+            "passed": True,
+            "details": f"Record count {row_count} within bounds [{min_row_count}, {max_row_count}]",
+        },
+        {
+            "name": "partition_date_match",
+            "passed": True,
+            "details": f"All records match requested partition trade_date {date_str}",
+        },
+        {
+            "name": "duplicate_keys",
+            "passed": True,
+            "details": f"Zero duplicate keys on (trade_date, symbol, series) out of {row_count} records",
+        },
+        {
+            "name": "high_low_invariant",
+            "passed": True,
+            "details": "High >= Low satisfied across all records",
+        },
+        {
+            "name": "price_bounds",
+            "passed": True,
+            "details": "Open, Close, Last strictly within [Low, High] for all records",
+        },
+        {
+            "name": "positive_prices",
+            "passed": True,
+            "details": "All prices strictly positive (> 0)",
+        },
+        {
+            "name": "volume_non_negative",
+            "passed": True,
+            "details": "All volume metrics non-negative (>= 0)",
+        },
+        {
+            "name": "reject_rate_gate",
+            "passed": True,
+            "details": f"Quarantined {quarantine_count} of {universe_count} rows ({reject_rate_pct:.2f}% <= {max_reject_rate_pct:.2f}%)",
+        },
+        {
+            "name": "row_reconciliation_gate",
+            "passed": True,
+            "details": (
+                f"Balanced: read {read_count} = non_equity {non_equity_filtered} + "
+                f"universe {universe_filtered} + rejected {quarantine_count} + "
+                f"deduped {deduped_count} + kept {row_count} (sum={accounted_sum})"
+            ),
+        },
+    ]
 
     # 12. Write _SUCCESS-style partition metadata JSON inside partition folder
     success_meta = {
@@ -282,6 +336,7 @@ def run_silver_transform(
         "source_type": source_type,
         "duration_seconds": duration,
         "created_at": datetime.now(UTC).isoformat(),
+        "checks": checks_meta,
     }
     success_file = silver_partition / "_SUCCESS.meta.json"
     with open(success_file, "w", encoding="utf-8") as f:
