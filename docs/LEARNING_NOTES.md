@@ -147,5 +147,43 @@ A companion study guide for interviews, explaining the concepts, design rational
 5. **Q: Why choose PyArrow over PySpark for the warehouse loading step?**
    *Answer:* Daily batch loads in equity market pipelines are typically small (under 2,000 rows, < 2 MB). PySpark carries a multi-second JVM startup cost and requires executor coordination. PyArrow reads Parquet files into memory in milliseconds with zero dependencies, making the loader lightweight, fast, and simple to run in lightweight containers.
 
+---
+
+## Phase 4: Financial Window Functions, Analytical Views & Batch Backfill Orchestration
+
+### Concepts Used
+1. **Window Functions in Relational Databases:**
+   - Window functions perform calculations across sets of table rows related to the current row, without collapsing the individual rows into a single summary output (unlike `GROUP BY`).
+   - `OVER (PARTITION BY symbol_id ORDER BY date)` divides data into per-symbol time series.
+2. **`LAG()` for Prior Session Comparisons:**
+   - `LAG(close, 1) OVER (PARTITION BY symbol_id ORDER BY date)` retrieves the closing price from the immediately preceding active trading session.
+   - Using `LAG` on trading rows cleanly handles calendar gaps (weekends, holidays) without requiring artificial date arithmetic or self-joins.
+3. **Window Framing (`ROWS` vs `RANGE`):**
+   - `ROWS BETWEEN 19 PRECEDING AND CURRENT ROW` enforces a strict count of 20 physical rows, which guarantees that a 20-day moving average always averages exactly 20 active trading sessions.
+   - `RANGE` operates on value intervals (e.g. `RANGE BETWEEN INTERVAL '20 days' PRECEDING AND CURRENT ROW`), which produces varying sample sizes in stock market data due to weekend and holiday closures.
+4. **Excluding Current Row from Baselines (Volume Spikes):**
+   - When detecting anomalies (such as volume spikes exceeding 2x the 20-day average), the window frame must be defined as `ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING`.
+   - Including the current day's anomalous volume in its own baseline would artificially elevate the average, causing true spikes to be under-detected.
+5. **Corporate Action Price Adjustments:**
+   - Raw transaction prices in exchange bhavcopies are unadjusted (actual money paid).
+   - On an ex-date for a 2:1 stock split, the stock trades at half the price. If calculated as `(close - lag_close) / lag_close`, it appears as a catastrophic -50% loss.
+   - The exchange provides an adjusted `prev_close` on ex-dates to calculate true performance (`return_vs_prev_close`). Comparing `prev_close` with `lag_close` detects corporate actions cleanly (`discrepancy_ratio > 0.05`).
+6. **Fault-Tolerant & Rate-Limit Resilient Backfills:**
+   - Historical backfills must balance speed with ethics. On transient errors (network glitch, missing day archive), backfills record per-day failures and continue.
+   - On rate limits (HTTP 403 or 429), continuing triggers retry storms and risks IP blacklisting. Halting immediately and marking remaining days as `not_attempted` protects infrastructure and guarantees predictable pipeline resumption.
+
+### Common Interview Questions
+1. **Q: What is the difference between `ROW_NUMBER()`, `RANK()`, and `DENSE_RANK()`?**
+   *Answer:* `ROW_NUMBER()` assigns unique sequential integers (1, 2, 3...) regardless of ties. `RANK()` assigns identical ranks to tied values and skips subsequent ranks (e.g. 1, 2, 2, 4). `DENSE_RANK()` assigns identical ranks to ties without skipping (e.g. 1, 2, 2, 3). For top gainers/losers, `ROW_NUMBER()` or `DENSE_RANK()` ensures consistent pagination.
+2. **Q: Why should moving averages use `ROWS` instead of `RANGE` in stock market data?**
+   *Answer:* `RANGE` filters by date offsets (e.g. `INTERVAL '20 days'`). Because stock markets are closed on weekends and holidays, a 20-calendar-day interval contains anywhere between 12 and 15 trading sessions, producing fluctuating sample sizes. `ROWS BETWEEN 19 PRECEDING AND CURRENT ROW` guarantees an exact 20-session sample depth.
+3. **Q: How do you handle insufficient history in rolling window calculations?**
+   *Answer:* Standard SQL window functions will compute averages over whatever rows are available (e.g. Day 3 will average 3 rows). In financial indicators, this produces misleading values. We check `ROW_NUMBER()` or window count, returning `NULL` until the full window width (e.g. 20 or 50 rows) is satisfied: `CASE WHEN ROW_NUMBER() >= 20 THEN AVG(...) ELSE NULL END`.
+4. **Q: How do stock splits and bonus issues distort unadjusted financial time series?**
+   *Answer:* A 2:1 stock split doubles shares and halves the price. Calculating daily returns against the previous day's unadjusted close creates a fake -50% crash. In contrast, the exchange-adjusted `prev_close` column in official bhavcopies is adjusted downwards on the ex-date, preserving true return continuity.
+5. **Q: Why halt a backfill on HTTP 403/429 instead of retrying or continuing?**
+   *Answer:* HTTP 403 (Forbidden) and 429 (Too Many Requests) signal that the server's rate-limiting or anti-scraping defenses have engaged. Continuing to make dozens of subsequent requests will exacerbate the block and risk long-term IP banning. Halting immediately, logging the incident, and marking remaining days as `not_attempted` allows cooling off and resumption once the rate limit expires.
+
+
 
 

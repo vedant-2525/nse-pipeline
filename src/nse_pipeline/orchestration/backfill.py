@@ -183,40 +183,46 @@ def run_backfill(
 
             # Check if previous date triggered a rate-limit halt
             if rate_limited:
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": is_trading_day(dt, holidays_path),
-                    "status": "not_attempted",
-                    "step": None,
-                    "reason": f"Halted after rate limit on previous date: {rate_limit_reason}",
-                    "duration_seconds": 0.0,
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": is_trading_day(dt, holidays_path),
+                        "status": "not_attempted",
+                        "step": None,
+                        "reason": f"Halted after rate limit on previous date: {rate_limit_reason}",
+                        "duration_seconds": 0.0,
+                    }
+                )
                 continue
 
             # 1. Non-trading day check (weekend / holiday)
             if not is_trading_day(dt, holidays_path):
                 reason = "Weekend" if is_weekend(dt) else "NSE Holiday"
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": False,
-                    "status": "skipped_non_trading_day",
-                    "step": None,
-                    "reason": reason,
-                    "duration_seconds": 0.0,
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": False,
+                        "status": "skipped_non_trading_day",
+                        "step": None,
+                        "reason": reason,
+                        "duration_seconds": 0.0,
+                    }
+                )
                 logger.info("Skipped non-trading day %s (%s)", date_str, reason)
                 continue
 
             # 2. Already completed idempotency check
             if not force and is_already_fully_done(dt, b_dir, s_dir):
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": True,
-                    "status": "skipped_already_loaded",
-                    "step": None,
-                    "reason": "Already fully ingested, transformed (default_list), and loaded",
-                    "duration_seconds": 0.0,
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "skipped_already_loaded",
+                        "step": None,
+                        "reason": "Already fully ingested, transformed (default_list), and loaded",
+                        "duration_seconds": 0.0,
+                    }
+                )
                 logger.info("Skipped %s: already fully loaded with default universe.", date_str)
                 continue
 
@@ -230,50 +236,60 @@ def run_backfill(
             except PermissionError as pe:
                 err_msg = str(pe)
                 if "403" in err_msg or "429" in err_msg or "rate limit" in err_msg.lower():
-                    logger.error("RATE LIMIT DETECTED on %s: %s. Halting backfill immediately.", date_str, pe)
+                    logger.error(
+                        "RATE LIMIT DETECTED on %s: %s. Halting backfill immediately.", date_str, pe
+                    )
                     rate_limited = True
                     rate_limit_reason = f"HTTP 403/429 Rate Limit: {pe}"
-                    day_results.append({
-                        "date": date_str,
-                        "is_trading_day": True,
-                        "status": "failed",
-                        "step": "ingest",
-                        "reason": rate_limit_reason,
-                        "duration_seconds": round(time.time() - day_start, 2),
-                    })
+                    day_results.append(
+                        {
+                            "date": date_str,
+                            "is_trading_day": True,
+                            "status": "failed",
+                            "step": "ingest",
+                            "reason": rate_limit_reason,
+                            "duration_seconds": round(time.time() - day_start, 2),
+                        }
+                    )
                     continue
                 else:
-                    day_results.append({
-                        "date": date_str,
-                        "is_trading_day": True,
-                        "status": "failed",
-                        "step": "ingest",
-                        "reason": str(pe),
-                        "duration_seconds": round(time.time() - day_start, 2),
-                    })
+                    day_results.append(
+                        {
+                            "date": date_str,
+                            "is_trading_day": True,
+                            "status": "failed",
+                            "step": "ingest",
+                            "reason": str(pe),
+                            "duration_seconds": round(time.time() - day_start, 2),
+                        }
+                    )
                     continue
             except FileNotFoundError:
                 msg = "no official file"
                 logger.warning("No official bhavcopy archive available from NSE for %s", date_str)
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": True,
-                    "status": "failed",
-                    "step": "ingest",
-                    "reason": msg,
-                    "duration_seconds": round(time.time() - day_start, 2),
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "failed",
+                        "step": "ingest",
+                        "reason": msg,
+                        "duration_seconds": round(time.time() - day_start, 2),
+                    }
+                )
                 continue
             except Exception as e:
                 logger.error("Ingest failed for %s: %s", date_str, e)
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": True,
-                    "status": "failed",
-                    "step": "ingest",
-                    "reason": str(e),
-                    "duration_seconds": round(time.time() - day_start, 2),
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "failed",
+                        "step": "ingest",
+                        "reason": str(e),
+                        "duration_seconds": round(time.time() - day_start, 2),
+                    }
+                )
                 continue
 
             # Step B: Transform (Silver)
@@ -289,14 +305,16 @@ def run_backfill(
                 )
             except Exception as e:
                 logger.error("Transform failed for %s: %s", date_str, e)
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": True,
-                    "status": "failed",
-                    "step": "transform",
-                    "reason": str(e),
-                    "duration_seconds": round(time.time() - day_start, 2),
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "failed",
+                        "step": "transform",
+                        "reason": str(e),
+                        "duration_seconds": round(time.time() - day_start, 2),
+                    }
+                )
                 continue
 
             # Step C: Load (Gold)
@@ -307,24 +325,28 @@ def run_backfill(
                     allow_fallback=False,
                     include_all_symbols=False,
                 )
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": True,
-                    "status": "ok",
-                    "step": None,
-                    "reason": f"Rows loaded: {load_metrics['rows_out']}",
-                    "duration_seconds": round(time.time() - day_start, 2),
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "ok",
+                        "step": None,
+                        "reason": f"Rows loaded: {load_metrics['rows_out']}",
+                        "duration_seconds": round(time.time() - day_start, 2),
+                    }
+                )
             except Exception as e:
                 logger.error("Load failed for %s: %s", date_str, e)
-                day_results.append({
-                    "date": date_str,
-                    "is_trading_day": True,
-                    "status": "failed",
-                    "step": "load",
-                    "reason": str(e),
-                    "duration_seconds": round(time.time() - day_start, 2),
-                })
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "failed",
+                        "step": "load",
+                        "reason": str(e),
+                        "duration_seconds": round(time.time() - day_start, 2),
+                    }
+                )
                 continue
 
     finally:

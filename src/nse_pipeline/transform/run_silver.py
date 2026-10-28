@@ -266,7 +266,9 @@ def run_silver_transform(
     universe_type = "default_list" if symbol_universe is not None else "all_eq"
     symbol_count_val = len(symbol_universe) if symbol_universe is not None else row_count
     reject_rate_pct = (quarantine_count / universe_count * 100.0) if universe_count > 0 else 0.0
-    accounted_sum = non_equity_filtered + universe_filtered + quarantine_count + deduped_count + row_count
+    accounted_sum = (
+        non_equity_filtered + universe_filtered + quarantine_count + deduped_count + row_count
+    )
 
     checks_meta = [
         {

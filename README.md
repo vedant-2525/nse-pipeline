@@ -161,6 +161,38 @@ python -m nse_pipeline.cli load --date 2024-10-11 --allow-fallback
 python -m nse_pipeline.cli load --date 2024-10-11 --include-all-symbols
 ```
 
+#### Phase 4: Historical Backfill & Financial Analytical Views
+```powershell
+# 1. Run backfill across a date range (starts with bounded range: 5 trading days)
+python -m nse_pipeline.cli backfill --from 2025-01-06 --to 2025-01-10
+
+# 2. Re-run same range (demonstrates instant idempotency skipping of loaded days)
+python -m nse_pipeline.cli backfill --from 2025-01-06 --to 2025-01-10
+
+# 3. Force re-processing of a backfill range
+python -m nse_pipeline.cli backfill --from 2025-01-06 --to 2025-01-10 --force
+```
+
+> [!NOTE]
+> **Backfill Runtime Expectations & Best Practices:**
+> - **New Trading Day:** ~15–25 seconds per date (polite HTTP download + single shared Spark session transform + atomic PostgreSQL COPY upsert).
+> - **Skipped (Already Loaded) Day:** < 100 milliseconds per date (checks Bronze, Silver metadata, and Gold facts).
+> - **Rate-Limit Defense:** If an HTTP 403 or 429 is encountered, the backfill stops immediately and marks all subsequent dates as `not_attempted` to prevent exchange IP banning.
+> - **Audit Reports:** Every run writes a structured execution summary to `data/reports/backfill_report_YYYYMMDD_HHMMSS.json`.
+> - **Recommendation:** Always test with a bounded range (e.g. 5 trading days) before initiating multi-month backfills.
+
+#### Phase 4 Analytical Views in PostgreSQL
+The database migration (`sql/05_analytics_views.sql`) creates seven financial window views in the `gold` schema:
+- `gold.vw_daily_returns`: Close price, lagged previous-session close, return vs lagged close, return vs exchange-adjusted prev close, and calendar days gap.
+- `gold.vw_moving_averages`: 20-day and 50-day rolling simple moving averages (NULL until full historical depth is reached).
+- `gold.vw_volatility_20d`: 20-session rolling sample standard deviation of daily returns (NULL until 20 returns exist).
+- `gold.vw_top_movers`: Top 5 daily gainers and top 5 daily losers per active trading session.
+- `gold.vw_volume_spikes`: Sessions where traded volume exceeds 2x the 20-day preceding average volume (excluding current row).
+- `gold.vw_sector_performance`: Daily average return aggregated by industry sector (with `'UNKNOWN'` fallback).
+- `gold.vw_suspected_corporate_actions`: Identifies stock split and bonus ex-dates where exchange-adjusted `prev_close` diverges from yesterday's close by > 5%.
+
+Sample queries demonstrating each view are provided in `sql/examples.sql`.
+
 > [!TIP]
 > **Database Password Rotation (Without Losing Volume Data):**
 > PostgreSQL persistent volumes initialize credentials on first boot. If you need to rotate the database password:

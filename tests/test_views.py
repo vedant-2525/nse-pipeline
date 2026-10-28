@@ -136,7 +136,16 @@ def test_view_moving_averages(postgres_test_db):
                         volume, turnover, source_format, source_type
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1000, 100000.0, 'udiff', 'test');
                     """,
-                    (sym_id, date_id, close_price, close_price, close_price, close_price, close_price, 100.0),
+                    (
+                        sym_id,
+                        date_id,
+                        close_price,
+                        close_price,
+                        close_price,
+                        close_price,
+                        close_price,
+                        100.0,
+                    ),
                 )
 
             cur.execute(
@@ -271,6 +280,6 @@ def test_view_suspected_corporate_actions(postgres_test_db):
             assert float(ca[2]) == pytest.approx(2000.00, abs=1e-2)  # lag_close
             assert float(ca[3]) == pytest.approx(1000.00, abs=1e-2)  # adjusted prev_close
             assert float(ca[4]) == pytest.approx(1020.00, abs=1e-2)  # current close
-            assert float(ca[5]) == pytest.approx(0.5000, abs=1e-4)   # 50% discrepancy
-            assert float(ca[6]) == pytest.approx(-49.00, abs=1e-2)   # fake crash
-            assert float(ca[7]) == pytest.approx(2.00, abs=1e-2)    # actual gain
+            assert float(ca[5]) == pytest.approx(0.5000, abs=1e-4)  # 50% discrepancy
+            assert float(ca[6]) == pytest.approx(-49.00, abs=1e-2)  # fake crash
+            assert float(ca[7]) == pytest.approx(2.00, abs=1e-2)  # actual gain

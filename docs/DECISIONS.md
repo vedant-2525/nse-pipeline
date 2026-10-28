@@ -254,4 +254,37 @@ Phase 3 requires ingesting cleaned Silver Parquet market data into a PostgreSQL 
 ### Trade-offs
 - Switching between full-market and curated-universe analysis requires explicit transform re-runs or isolated silver directories, but prevents unexpected fact-table inflation and guarantees deterministic loading.
 
+---
+
+## ADR 008: Analytical Window Views, Corporate Actions Strategy, and Backfill Design (Phase 4)
+
+- **Date:** 2026-10-28
+- **Status:** Accepted
+
+### Context
+Phase 4 requires computing rolling financial analytics (daily returns, 20d/50d moving averages, 20d volatility, top daily movers, volume spikes, and sector aggregations) on historical warehouse price series, as well as orchestrating multi-day batch backfills with rate-limiting defenses. Stock markets exhibit calendar discontinuities (weekends, holidays) and corporate actions (splits, bonus issues) that distort naive time-series arithmetic.
+
+### Decisions
+1. **Trading-Row Windowing vs Calendar-Day Windows:**
+   - Technical market indicators (e.g. 20-day SMA, 20-day volatility) must operate over active trading rows (`ROWS BETWEEN 19 PRECEDING AND CURRENT ROW`) rather than calendar day spans (`INTERVAL '20 days'`).
+   - Calendar intervals produce variable sample sizes (12 to 15 sessions) due to weekends and holidays, corrupting statistical variance and moving average comparability.
+2. **Corporate Action Detection & Raw Price Integrity:**
+   - Raw bhavcopy prices reflect actual executed cash settlement prices (auditable historical truth).
+   - On corporate action ex-dates (e.g. 2:1 stock split), NSE adjusts `prev_close` downward to match post-split parity, while yesterday's executed close (`lag_close`) remains unadjusted.
+   - `gold.vw_suspected_corporate_actions` detects ex-dates where `|prev_close - lag_close| / lag_close > 0.05` (5%).
+   - We consciously do NOT silently mutate historical prices. Full retrospective backward chain-adjustment is deferred to downstream portfolio analytics.
+3. **Database Views vs Materialized Tables:**
+   - Analytical views (`gold.vw_*`) compute dynamic indicators on-the-fly without storage duplication or cache staleness.
+   - For curated universes (Nifty 50), queries execute in sub-15ms using underlying B-tree indexes on `(symbol_id, date_id)` and `date_id`.
+4. **Backfill Orchestration Architecture:**
+   - **Per-Day Isolation**: Execution loops across dates individually, ensuring a failure on day $T$ does not rollback or compromise days $T-1$ or $T+1$.
+   - **Single Spark Session**: A single `SparkSession` is created once and reused across all dates, eliminating 20s of JVM startup overhead per day.
+   - **Hard Halt on Rate Limits (HTTP 403/429)**: Backfill halts immediately upon encountering exchange rate limiting, marking subsequent dates as `not_attempted` and exiting non-zero to protect exchange access.
+   - **Resumability**: Days meeting all three criteria (official bronze file, valid silver metadata with `default_list`, and loaded gold facts) are skipped in milliseconds.
+
+### Alternatives Considered
+- *Using DuckDB or Pandas for analytics views:* Rejected because serving views directly from PostgreSQL allows standard BI tools, reporting dashboards, and SQL clients to query pre-computed indicators without secondary ingestion pipelines.
+- *Materialized Views:* Rejected because `REFRESH MATERIALIZED VIEW` requires explicit post-load orchestration and exclusive table locks, which adds complexity unnecessary for current data volumes.
+
+
 

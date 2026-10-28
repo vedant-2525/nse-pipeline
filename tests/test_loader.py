@@ -113,9 +113,7 @@ def test_validate_partition_metadata_all_eq_refused_without_flag(tmp_path: Path)
     (p_dir / "_SUCCESS.meta.json").write_text(json.dumps(meta_content), encoding="utf-8")
 
     with pytest.raises(PermissionError, match="refuses full market loads"):
-        validate_partition_metadata(
-            p_dir, trade_date=date(2024, 10, 11), include_all_symbols=False
-        )
+        validate_partition_metadata(p_dir, trade_date=date(2024, 10, 11), include_all_symbols=False)
 
 
 def test_validate_partition_metadata_all_eq_permitted_with_flag(tmp_path: Path):
@@ -482,4 +480,6 @@ def test_load_rollback_on_failure_integration(tmp_path: Path, postgres_test_db):
                 (test_date,),
             )
             dq_row = cur.fetchone()
-            assert dq_row is not None, "Expected at least one ops.dq_results entry for the failed run"
+            assert dq_row is not None, (
+                "Expected at least one ops.dq_results entry for the failed run"
+            )

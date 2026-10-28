@@ -134,9 +134,7 @@ def test_backfill_success_across_range(
 
 @patch("nse_pipeline.orchestration.backfill.is_already_fully_done", return_value=False)
 @patch("nse_pipeline.orchestration.backfill.BhavcopyDownloader")
-def test_backfill_stops_immediately_on_rate_limit(
-    mock_downloader_cls, mock_done, tmp_path: Path
-):
+def test_backfill_stops_immediately_on_rate_limit(mock_downloader_cls, mock_done, tmp_path: Path):
     """Verify HTTP 429/430 halts execution and marks subsequent dates as not_attempted."""
     mock_downloader = MagicMock()
     # First day raises 429 rate limit
