@@ -309,7 +309,7 @@ def test_db_init_and_dimensions_integration(postgres_test_db):
     """Verify database migrations apply cleanly and dimensions are seeded."""
     with get_db_connection(autocommit=True) as conn:
         applied = apply_sql_migrations(conn, sql_dir="sql")
-        assert len(applied) == 4
+        assert len(applied) == 5
 
         symbols_count = seed_dim_symbols(conn, sectors_path="config/sectors.csv")
         assert symbols_count >= 50

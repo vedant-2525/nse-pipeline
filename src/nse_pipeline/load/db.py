@@ -64,7 +64,9 @@ def apply_sql_migrations(conn: psycopg.Connection, sql_dir: Path | str = "sql") 
     if not sql_path.is_dir():
         raise FileNotFoundError(f"SQL migrations directory not found at: {sql_path}")
 
-    sql_files = sorted([f for f in sql_path.glob("*.sql") if f.name != ".gitkeep"])
+    sql_files = sorted(
+        [f for f in sql_path.glob("*.sql") if f.name != ".gitkeep" and f.name[0].isdigit()]
+    )
     applied = []
 
     with conn.transaction():
