@@ -459,3 +459,47 @@ def test_partitioned_parquet_layout_multi_day_and_idempotency(
     # Assert Day 2 files were completely untouched
     d2_mtimes_after = [f.stat().st_mtime_ns for f in d2_files]
     assert d2_mtimes_before == d2_mtimes_after
+
+
+def test_quarantine_base_pyarrow_read_and_partition_layout(
+    tmp_path: Path, spark_session: SparkSession
+):
+    """Verify that partitioned quarantine parquet directory loads cleanly with pandas/pyarrow."""
+    import pandas as pd
+
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver" / "equity_prices"
+    quarantine_dir = tmp_path / "quarantine" / "equity_prices"
+
+    d1 = date(2024, 10, 11)
+    p1 = bronze_dir / f"trade_date={d1}"
+    p1.mkdir(parents=True)
+    fix1 = Path("tests/fixtures/bhavcopy_bad_data_sample.csv")
+    f1 = p1 / fix1.name
+    f1.write_bytes(fix1.read_bytes())
+    write_file_metadata(f1, "nse_official", "https://example.com/bhav1.zip")
+
+    # Transform forces bad rows into quarantine
+    try:
+        run_silver_transform(
+            trade_date=d1,
+            bronze_dir=bronze_dir,
+            silver_dir=silver_dir,
+            quarantine_dir=quarantine_dir,
+            spark=spark_session,
+            min_row_count=1,
+            symbol_universe=None,
+        )
+    except Exception:
+        pass
+
+    assert quarantine_dir.is_dir()
+    part_dir = quarantine_dir / f"trade_date={d1}"
+    assert part_dir.is_dir()
+
+    # Read the WHOLE quarantine base directory with pd.read_parquet (pyarrow engine)
+    quarantine_df = pd.read_parquet(quarantine_dir)
+    assert len(quarantine_df) > 0
+    assert "trade_date" in quarantine_df.columns
+    assert "reject_reason" in quarantine_df.columns
+    assert str(d1) in [str(x) for x in quarantine_df["trade_date"].unique()]
