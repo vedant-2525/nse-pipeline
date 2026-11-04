@@ -1,6 +1,7 @@
 """Scaffold and environment tests for Phase 0."""
 
 import csv
+import os
 from pathlib import Path
 
 import yaml
@@ -81,3 +82,17 @@ def test_holidays_csv_valid():
         rows = list(reader)
 
     assert len(rows) > 0
+
+
+def test_isolation_guard_prevents_real_warehouse_access():
+    """Prove the autouse _no_real_warehouse_access guard is active for offline tests.
+
+    This test does NOT use the postgres_test_db fixture, so the autouse fixture
+    must have set POSTGRES_DB to a name ending in '_test'.  Any accidental
+    get_db_connection() call in an offline test would therefore hit a safe
+    guard database, never nse_warehouse.
+    """
+    db = os.environ.get("POSTGRES_DB", "")
+    assert db.endswith("_test"), (
+        f"Expected POSTGRES_DB to end in '_test' (isolation guard active), got '{db}'"
+    )

@@ -19,6 +19,40 @@ from nse_pipeline.utils.spark import get_spark_session, stop_spark_session
 
 load_dotenv()
 
+# ---------------------------------------------------------------------------
+# Isolation guard: every test that does NOT use postgres_test_db gets
+# POSTGRES_DB set to a name ending in "_test" (or an unreachable host).
+# This prevents accidental writes / reads from the real nse_warehouse.
+# ---------------------------------------------------------------------------
+_GUARD_DB_NAME = "nse_warehouse_guard_test"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_warehouse_access(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """Autouse fixture that prevents any test from accidentally hitting nse_warehouse.
+
+    For tests that use postgres_test_db, the session fixture already overrides
+    POSTGRES_DB → nse_warehouse_test; this guard yields immediately without
+    changing anything so the two fixtures don't conflict.
+
+    For all other tests, POSTGRES_DB is set to a name ending in '_test'.
+    If get_db_connection() is called without a mock, the connection will
+    target a non-existent test database (or fail), never the real warehouse.
+    """
+    if "postgres_test_db" in request.fixturenames:
+        # postgres_test_db session fixture already guarantees isolation.
+        yield
+        return
+
+    old = os.environ.get("POSTGRES_DB")
+    os.environ["POSTGRES_DB"] = _GUARD_DB_NAME
+    yield
+    if old is not None:
+        os.environ["POSTGRES_DB"] = old
+    elif "POSTGRES_DB" in os.environ:
+        del os.environ["POSTGRES_DB"]
+
+
 _TEST_DB_NAME = "nse_warehouse_test"
 
 
