@@ -12,37 +12,47 @@ from nse_pipeline.orchestration.backfill import (
 
 
 def test_is_already_fully_done_requires_all_three_layers(tmp_path: Path):
-    """Verify is_already_fully_done returns True only when bronze, silver, and gold exist."""
+    """Verify is_already_fully_done returns True only when bronze, silver, and gold exist.
+
+    The "not loaded yet" assertions must not reach the real database. We patch
+    is_postgres_reachable to return False so the Gold check short-circuits and
+    the function relies only on file-system state for those assertions.
+    This makes the test a true offline unit test regardless of whether the
+    real warehouse happens to hold data for 2024-10-11.
+    """
     trade_date = date(2024, 10, 11)
     date_str = "2024-10-11"
     bronze_dir = tmp_path / "bronze"
     silver_dir = tmp_path / "silver"
 
-    # Initially nothing exists
-    assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is False
+    # Patch postgres as unreachable so file-system checks run offline
+    with patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=False):
+        # Initially nothing exists
+        assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is False
 
-    # 1. Create Bronze
-    b_part = bronze_dir / f"trade_date={date_str}"
-    b_part.mkdir(parents=True)
-    raw_file = b_part / "bhavcopy.csv"
-    raw_file.write_text("SYMBOL,OPEN\nRELIANCE,2500\n", encoding="utf-8")
-    meta_bronze = b_part / "bhavcopy.csv.meta.json"
-    meta_bronze.write_text(json.dumps({"source_name": "nse_official"}), encoding="utf-8")
-    assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is False
+        # 1. Create Bronze
+        b_part = bronze_dir / f"trade_date={date_str}"
+        b_part.mkdir(parents=True)
+        raw_file = b_part / "bhavcopy.csv"
+        raw_file.write_text("SYMBOL,OPEN\nRELIANCE,2500\n", encoding="utf-8")
+        meta_bronze = b_part / "bhavcopy.csv.meta.json"
+        meta_bronze.write_text(json.dumps({"source_name": "nse_official"}), encoding="utf-8")
+        assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is False
 
-    # 2. Create Silver with default_list
-    s_part = silver_dir / f"trade_date={date_str}"
-    s_part.mkdir(parents=True)
-    s_meta = {
-        "trade_date": date_str,
-        "universe": "default_list",
-        "source_type": "official",
-        "row_count": 51,
-    }
-    (s_part / "_SUCCESS.meta.json").write_text(json.dumps(s_meta), encoding="utf-8")
-    assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is False
+        # 2. Create Silver with default_list
+        s_part = silver_dir / f"trade_date={date_str}"
+        s_part.mkdir(parents=True)
+        s_meta = {
+            "trade_date": date_str,
+            "universe": "default_list",
+            "source_type": "official",
+            "row_count": 51,
+        }
+        (s_part / "_SUCCESS.meta.json").write_text(json.dumps(s_meta), encoding="utf-8")
+        # DB still unreachable → not fully done
+        assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is False
 
-    # 3. Mock PostgreSQL check returning row in gold
+    # 3. Now mock DB as reachable with a gold row present
     with (
         patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True),
         patch("nse_pipeline.orchestration.backfill.get_db_connection") as mock_conn_fn,
