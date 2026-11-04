@@ -10,6 +10,7 @@ Why this design:
 """
 
 import json
+import time
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -251,8 +252,10 @@ def load_silver_partition(
 
         # Record Silver quality check outcomes into ops.dq_results
         silver_checks = meta.get("checks", [])
+        t_dq_start = time.time()
         if silver_checks:
             log_dq_results(run_id=run_id, results=silver_checks, default_stage="silver")
+        t_dq_duration = time.time() - t_dq_start
     except Exception as e:
         finished_at = datetime.now(UTC)
         log_pipeline_run(
@@ -276,6 +279,7 @@ def load_silver_partition(
         raise
 
     # 2. Read Parquet files via PyArrow
+    t_read_start = time.time()
     table = pq.read_table(partition_dir)
     rows_in = table.num_rows
     if rows_in == 0:
@@ -324,15 +328,19 @@ def load_silver_partition(
         )
 
     # 3. Execute atomic load in ONE transaction
+    t_read_duration = time.time() - t_read_start
     should_close_conn = False
     active_conn = conn
+    t_conn_start = time.time()
     if active_conn is None:
         active_conn = get_db_connection()
         should_close_conn = True
+    t_conn_duration = time.time() - t_conn_start
 
     try:
         with active_conn.transaction():
             with active_conn.cursor() as cur:
+                t_staging_start = time.time()
                 # 3a. Create temporary staging table
                 cur.execute(
                     """
@@ -366,6 +374,7 @@ def load_silver_partition(
                 with cur.copy(copy_sql) as copy:
                     for row in staging_rows:
                         copy.write_row(row)
+                t_copy_duration = time.time() - t_staging_start
 
                 # 3c. Upsert any new/unseen symbols into gold.dim_symbol
                 cur.execute(
@@ -383,6 +392,7 @@ def load_silver_partition(
                 )
 
                 # 3d. Atomic upsert into gold.fact_daily_price
+                t_upsert_start = time.time()
                 upsert_fact_sql = """
                     INSERT INTO gold.fact_daily_price (
                         symbol_id, date_id, open, high, low, close, last, prev_close,
@@ -422,11 +432,13 @@ def load_silver_partition(
                 """
                 cur.execute(upsert_fact_sql, {"source_type": source_type})
                 rows_out = cur.rowcount
+                t_upsert_duration = time.time() - t_upsert_start
 
         finished_at = datetime.now(UTC)
         duration = round((finished_at - started_at).total_seconds(), 2)
 
         # 4. Log successful execution
+        t_runlog_start = time.time()
         log_pipeline_run(
             run_id=run_id,
             stage="load",
@@ -444,6 +456,18 @@ def load_silver_partition(
             check_name="fact_upsert_check",
             status="PASS",
             details=f"Upserted {rows_out} rows into gold.fact_daily_price (rows_in={rows_in})",
+        )
+        t_runlog_duration = time.time() - t_runlog_start
+
+        logger.info(
+            "[PROFILE] Load breakdown for %s: conn=%.3fs, pyarrow_read=%.3fs, staging_copy=%.3fs, fact_upsert=%.3fs, dq_results=%.3fs, run_log=%.3fs",
+            date_str,
+            t_conn_duration,
+            t_read_duration,
+            t_copy_duration,
+            t_upsert_duration,
+            t_dq_duration,
+            t_runlog_duration,
         )
 
         logger.info(
