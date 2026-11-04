@@ -196,3 +196,65 @@ def test_backfill_continues_past_non_rate_limit_failure(
     assert report["days"][0]["status"] == "failed"
     assert report["days"][0]["reason"] == "no official file"
     assert report["days"][1]["status"] == "ok"
+
+
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=False)
+def test_backfill_preflight_db_unreachable_exits_fast(mock_reachable, tmp_path: Path):
+    """Verify backfill fails immediately on preflight when database is unreachable."""
+    from_date = date(2024, 10, 14)
+    to_date = date(2024, 10, 16)
+
+    exit_code, report = run_backfill(
+        from_date=from_date,
+        to_date=to_date,
+        reports_dir=tmp_path / "reports",
+        spark=MagicMock(),
+    )
+
+    assert exit_code == 1
+    assert report["summary"]["total_calendar_days"] == 3
+    assert report["summary"]["not_attempted"] == 3
+    assert report["summary"]["ok"] == 0
+    assert report["summary"]["failed"] == 0
+    assert all(d["status"] == "not_attempted" for d in report["days"])
+    assert "preflight failure" in report["days"][0]["reason"]
+
+
+@patch("nse_pipeline.orchestration.backfill.is_already_fully_done", return_value=False)
+@patch("nse_pipeline.orchestration.backfill.run_silver_transform", return_value={"kept_count": 51})
+@patch("nse_pipeline.orchestration.backfill.BhavcopyDownloader")
+def test_backfill_mid_run_db_outage_halts_immediately(
+    mock_downloader_cls, mock_transform, mock_done, tmp_path: Path
+):
+    """Verify database outage during mid-run load halts execution and marks remainder not_attempted."""
+    mock_downloader = MagicMock()
+    mock_downloader.download.return_value = Path("data/bronze/file.csv")
+    mock_downloader_cls.return_value = mock_downloader
+
+    # 2024-10-14 (Mon) to 2024-10-16 (Wed) - 3 trading days
+    from_date = date(2024, 10, 14)
+    to_date = date(2024, 10, 16)
+
+    # Preflight passes, but during day 1 load it fails with connection error
+    with (
+        patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", side_effect=[True, True, False, False]),
+        patch(
+            "nse_pipeline.orchestration.backfill.load_silver_partition",
+            side_effect=ConnectionError("Could not connect to PostgreSQL server: connection refused"),
+        ),
+    ):
+        exit_code, report = run_backfill(
+            from_date=from_date,
+            to_date=to_date,
+            reports_dir=tmp_path / "reports",
+            spark=MagicMock(),
+        )
+
+        assert exit_code == 1
+        assert report["summary"]["failed"] == 1
+        assert report["summary"]["not_attempted"] == 2
+        assert report["days"][0]["status"] == "failed"
+        assert report["days"][0]["step"] == "load"
+        assert report["days"][1]["status"] == "not_attempted"
+        assert report["days"][2]["status"] == "not_attempted"
+

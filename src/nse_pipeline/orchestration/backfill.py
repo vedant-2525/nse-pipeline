@@ -14,6 +14,7 @@ Why this design:
 """
 
 import json
+import sys
 import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -159,6 +160,56 @@ def run_backfill(
         calendar_dates.append(curr)
         curr += timedelta(days=1)
 
+    # 0. Preflight check: Verify PostgreSQL warehouse is reachable before starting execution
+    if not is_postgres_reachable():
+        err_msg = (
+            "Error: PostgreSQL warehouse is not reachable.\n"
+            "Action required: Ensure Docker Desktop is running and start the container:\n"
+            "  docker compose up -d\n"
+            "Then re-run: python -m nse_pipeline.cli db init"
+        )
+        print(err_msg, file=sys.stderr)
+        logger.error("Backfill preflight failed: PostgreSQL warehouse is not reachable.")
+        # Mark all dates in range as not_attempted in audit report
+        preflight_results = [
+            {
+                "date": d.strftime("%Y-%m-%d"),
+                "is_trading_day": is_trading_day(d, holidays_path),
+                "status": "not_attempted",
+                "step": None,
+                "reason": "PostgreSQL warehouse is not reachable (preflight failure)",
+                "duration_seconds": 0.0,
+            }
+            for d in calendar_dates
+        ]
+        finished_at = datetime.now(UTC)
+        total_duration = round(time.time() - start_time, 2)
+        total_days = len(calendar_dates)
+        trading_days = sum(1 for d in preflight_results if d.get("is_trading_day", True))
+        report = {
+            "from_date": from_date.strftime("%Y-%m-%d"),
+            "to_date": to_date.strftime("%Y-%m-%d"),
+            "force": force,
+            "started_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "duration_seconds": total_duration,
+            "summary": {
+                "total_calendar_days": total_days,
+                "trading_days": trading_days,
+                "ok": 0,
+                "skipped_already_loaded": 0,
+                "skipped_non_trading_day": 0,
+                "failed": 0,
+                "not_attempted": total_days,
+            },
+            "days": preflight_results,
+        }
+        report_filename = f"backfill_report_{started_at.strftime('%Y%m%d_%H%M%S')}.json"
+        report_path = rep_dir / report_filename
+        with open(report_path, "w", encoding="utf-8") as rf:
+            json.dump(report, rf, indent=2)
+        return 1, report
+
     # Manage shared Spark session across dates
     spark_session = spark or get_spark_session(app_name="nse-pipeline-backfill")
     should_stop_spark = spark is None
@@ -181,7 +232,7 @@ def run_backfill(
         for _idx, dt in enumerate(calendar_dates):
             date_str = dt.strftime("%Y-%m-%d")
 
-            # Check if previous date triggered a rate-limit halt
+            # Check if previous date triggered a rate-limit or systemic failure halt
             if rate_limited:
                 day_results.append(
                     {
@@ -189,7 +240,7 @@ def run_backfill(
                         "is_trading_day": is_trading_day(dt, holidays_path),
                         "status": "not_attempted",
                         "step": None,
-                        "reason": f"Halted after rate limit on previous date: {rate_limit_reason}",
+                        "reason": f"Halted after failure on previous date: {rate_limit_reason}",
                         "duration_seconds": 0.0,
                     }
                 )
@@ -318,6 +369,26 @@ def run_backfill(
                 continue
 
             # Step C: Load (Gold)
+            # Before load, check database reachability to fail fast on DB outage
+            if not is_postgres_reachable():
+                logger.error(
+                    "DATABASE OUTAGE DETECTED on %s: PostgreSQL warehouse is not reachable. Halting backfill immediately.",
+                    date_str,
+                )
+                rate_limited = True
+                rate_limit_reason = "PostgreSQL warehouse became unreachable (systemic outage)"
+                day_results.append(
+                    {
+                        "date": date_str,
+                        "is_trading_day": True,
+                        "status": "failed",
+                        "step": "load",
+                        "reason": rate_limit_reason,
+                        "duration_seconds": round(time.time() - day_start, 2),
+                    }
+                )
+                continue
+
             try:
                 load_metrics = load_silver_partition(
                     trade_date=dt,
@@ -336,6 +407,28 @@ def run_backfill(
                     }
                 )
             except Exception as e:
+                err_str = str(e).lower()
+                is_connection_error = any(
+                    x in err_str
+                    for x in [
+                        "connection",
+                        "timeout",
+                        "not reachable",
+                        "could not connect",
+                        "failed to connect",
+                        "refused",
+                    ]
+                ) or not is_postgres_reachable()
+
+                if is_connection_error:
+                    logger.error(
+                        "DATABASE OUTAGE DETECTED during load for %s: %s. Halting backfill immediately.",
+                        date_str,
+                        e,
+                    )
+                    rate_limited = True
+                    rate_limit_reason = f"PostgreSQL connection failure: {e}"
+
                 logger.error("Load failed for %s: %s", date_str, e)
                 day_results.append(
                     {
