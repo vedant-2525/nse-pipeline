@@ -282,6 +282,22 @@ def handle_backfill(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def handle_daily(args: argparse.Namespace) -> int:
+    """Handles the 'daily' CLI command for single-day pipeline runs."""
+    from nse_pipeline.orchestration.daily import run_daily_pipeline
+
+    exit_code, _ = run_daily_pipeline(
+        target_date=args.date,
+        cutoff_hour=args.cutoff_hour,
+        force=args.force,
+        bronze_dir=args.bronze_dir,
+        silver_dir=args.silver_dir,
+        quarantine_dir=args.quarantine_dir,
+        reports_dir=args.reports_dir,
+    )
+    return exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -466,6 +482,47 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to directory where backfill audit JSON reports are written (default: data/reports)",
     )
 
+    # 7. Daily command
+    daily_parser = subparsers.add_parser(
+        "daily", help="Run end-to-end pipeline for the most recent or specified trading day"
+    )
+    daily_parser.add_argument(
+        "--date",
+        type=parse_date,
+        help="Target trading date in YYYY-MM-DD format (default: resolved from current time and cutoff)",
+    )
+    daily_parser.add_argument(
+        "--cutoff-hour",
+        type=int,
+        default=19,
+        help="Hour in IST after which today's file is expected (default: 19)",
+    )
+    daily_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-execute pipeline even if data is already loaded in warehouse",
+    )
+    daily_parser.add_argument(
+        "--bronze-dir",
+        default="data/bronze",
+        help="Path to Bronze storage base folder (default: data/bronze)",
+    )
+    daily_parser.add_argument(
+        "--silver-dir",
+        default="data/silver/equity_prices",
+        help="Path to Silver storage folder (default: data/silver/equity_prices)",
+    )
+    daily_parser.add_argument(
+        "--quarantine-dir",
+        default="data/quarantine/equity_prices",
+        help="Path to Quarantine storage folder (default: data/quarantine/equity_prices)",
+    )
+    daily_parser.add_argument(
+        "--reports-dir",
+        default="data/reports",
+        help="Path to directory where audit JSON reports are written (default: data/reports)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "ingest":
@@ -480,6 +537,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_run(args)
     elif args.command == "backfill":
         return handle_backfill(args)
+    elif args.command == "daily":
+        return handle_daily(args)
     else:
         parser.print_help()
         return 0
