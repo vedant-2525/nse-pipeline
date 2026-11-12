@@ -197,8 +197,9 @@ Sample queries demonstrating each view are provided in `sql/examples.sql`.
 > **Database Password Rotation (Without Losing Volume Data):**
 > PostgreSQL persistent volumes initialize credentials on first boot. If you need to rotate the database password:
 > 1. In the running container, alter the user password directly:
->    ```bash
->    docker exec -it nse_postgres psql -U postgres -c "ALTER USER postgres PASSWORD 'new_password';"
+>    ```powershell
+>    # In PowerShell (omit -t to avoid TTY input stream issues on Windows)
+>    docker exec -i nse_postgres psql -U postgres -c "ALTER USER postgres PASSWORD 'new_password';"
 >    ```
 > 2. Update `POSTGRES_PASSWORD=new_password` in your `.env` file.
 > 3. Restart the container without removing volumes:
