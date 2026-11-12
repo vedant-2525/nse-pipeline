@@ -11,7 +11,6 @@ Provides a read-only window onto the PostgreSQL warehouse:
 
 from datetime import date
 
-import pandas as pd
 import streamlit as st
 
 from dashboard.queries import (
@@ -70,9 +69,13 @@ with col4:
 today = date.today()
 days_lag = (today - summary["latest_date"]).days
 if days_lag <= 3:
-    st.success(f"Data is fresh. Latest trading session: {summary['latest_date']} ({days_lag} calendar days ago).")
+    st.success(
+        f"Data is fresh. Latest trading session: {summary['latest_date']} ({days_lag} calendar days ago)."
+    )
 else:
-    st.info(f"Latest data in warehouse is from {summary['latest_date']} ({days_lag} calendar days ago).")
+    st.info(
+        f"Latest data in warehouse is from {summary['latest_date']} ({days_lag} calendar days ago)."
+    )
 
 st.divider()
 

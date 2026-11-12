@@ -5,7 +5,7 @@ Preflight -> Ingest (NSE official only) -> Transform (Silver) -> Load (Gold).
 Reuses historical backfill orchestration logic for guaranteed consistency and idempotency.
 """
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo

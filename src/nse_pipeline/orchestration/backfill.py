@@ -408,17 +408,20 @@ def run_backfill(
                 )
             except Exception as e:
                 err_str = str(e).lower()
-                is_connection_error = any(
-                    x in err_str
-                    for x in [
-                        "connection",
-                        "timeout",
-                        "not reachable",
-                        "could not connect",
-                        "failed to connect",
-                        "refused",
-                    ]
-                ) or not is_postgres_reachable()
+                is_connection_error = (
+                    any(
+                        x in err_str
+                        for x in [
+                            "connection",
+                            "timeout",
+                            "not reachable",
+                            "could not connect",
+                            "failed to connect",
+                            "refused",
+                        ]
+                    )
+                    or not is_postgres_reachable()
+                )
 
                 if is_connection_error:
                     logger.error(

@@ -247,10 +247,15 @@ def test_backfill_mid_run_db_outage_halts_immediately(
 
     # Preflight passes, but during day 1 load it fails with connection error
     with (
-        patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", side_effect=[True, True, False, False]),
+        patch(
+            "nse_pipeline.orchestration.backfill.is_postgres_reachable",
+            side_effect=[True, True, False, False],
+        ),
         patch(
             "nse_pipeline.orchestration.backfill.load_silver_partition",
-            side_effect=ConnectionError("Could not connect to PostgreSQL server: connection refused"),
+            side_effect=ConnectionError(
+                "Could not connect to PostgreSQL server: connection refused"
+            ),
         ),
     ):
         exit_code, report = run_backfill(
@@ -267,4 +272,3 @@ def test_backfill_mid_run_db_outage_halts_immediately(
         assert report["days"][0]["step"] == "load"
         assert report["days"][1]["status"] == "not_attempted"
         assert report["days"][2]["status"] == "not_attempted"
-
