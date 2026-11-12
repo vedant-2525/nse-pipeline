@@ -55,7 +55,7 @@ switch ($Task) {
     }
     "dashboard" {
         Write-Host "--> Starting Streamlit Dashboard..." -ForegroundColor Cyan
-        & $StreamlitExe run dashboard/app.py
+        & $StreamlitExe run dashboard/app.py --server.address localhost
     }
     "backfill" {
         Write-Host "--> Running Backfill..." -ForegroundColor Cyan
