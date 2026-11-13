@@ -164,12 +164,17 @@ def run_backfill(
     if not is_postgres_reachable():
         err_msg = (
             "Error: PostgreSQL warehouse is not reachable.\n"
-            "Action required: Ensure Docker Desktop is running and start the container:\n"
-            "  docker compose up -d\n"
-            "Then re-run: python -m nse_pipeline.cli db init"
+            "Action required:\n"
+            "  1. Ensure Docker Desktop is running (check the system tray icon).\n"
+            "  2. If using WSL2, the Docker bridge may have paused — restart Docker Desktop.\n"
+            "  3. Start the container: docker compose up -d\n"
+            "  4. Then re-run: python -m nse_pipeline.cli backfill --from ... --to ...\n"
+            "Tip: It is completely safe to re-run with the same date range; completed days are skipped.\n"
         )
         print(err_msg, file=sys.stderr)
-        logger.error("Backfill preflight failed: PostgreSQL warehouse is not reachable.")
+        logger.error(
+            "Backfill preflight failed: PostgreSQL warehouse is not reachable. Ensure Docker Desktop is running."
+        )
         # Mark all dates in range as not_attempted in audit report
         preflight_results = [
             {
@@ -372,11 +377,15 @@ def run_backfill(
             # Before load, check database reachability to fail fast on DB outage
             if not is_postgres_reachable():
                 logger.error(
-                    "DATABASE OUTAGE DETECTED on %s: PostgreSQL warehouse is not reachable. Halting backfill immediately.",
+                    "DATABASE OUTAGE DETECTED on %s: PostgreSQL warehouse is not reachable. "
+                    "Halting backfill immediately. Check Docker Desktop is running, then: docker compose up -d",
                     date_str,
                 )
                 rate_limited = True
-                rate_limit_reason = "PostgreSQL warehouse became unreachable (systemic outage)"
+                rate_limit_reason = (
+                    "PostgreSQL warehouse became unreachable (systemic outage). "
+                    "Check Docker Desktop / WSL2 status, then: docker compose up -d"
+                )
                 day_results.append(
                     {
                         "date": date_str,
