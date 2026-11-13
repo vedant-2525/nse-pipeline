@@ -278,6 +278,7 @@ def handle_backfill(args: argparse.Namespace) -> int:
         silver_dir=args.silver_dir,
         quarantine_dir=args.quarantine_dir,
         reports_dir=args.reports_dir,
+        quiet=args.quiet,
     )
     return exit_code
 
@@ -294,6 +295,7 @@ def handle_daily(args: argparse.Namespace) -> int:
         silver_dir=args.silver_dir,
         quarantine_dir=args.quarantine_dir,
         reports_dir=args.reports_dir,
+        quiet=args.quiet,
     )
     return exit_code
 
@@ -481,6 +483,12 @@ def main(argv: list[str] | None = None) -> int:
         default="data/reports",
         help="Path to directory where backfill audit JSON reports are written (default: data/reports)",
     )
+    backfill_parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Quiet mode: prints minimal progress to console, writes full log to data/logs/",
+    )
 
     # 7. Daily command
     daily_parser = subparsers.add_parser(
@@ -521,6 +529,12 @@ def main(argv: list[str] | None = None) -> int:
         "--reports-dir",
         default="data/reports",
         help="Path to directory where audit JSON reports are written (default: data/reports)",
+    )
+    daily_parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Quiet mode: prints minimal progress to console, writes full log to data/logs/",
     )
 
     args = parser.parse_args(argv)

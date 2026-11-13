@@ -14,6 +14,7 @@ Why this design:
 """
 
 import json
+import logging
 import sys
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -128,6 +129,7 @@ def run_backfill(
     symbols_config: str = "config/symbols.yaml",
     holidays_path: str = "config/holidays.csv",
     spark: SparkSession | None = None,
+    quiet: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Executes an end-to-end backfill across a date range.
 
@@ -223,9 +225,23 @@ def run_backfill(
     rate_limited = False
     rate_limit_reason = ""
 
-    print("\n" + "=" * 80)
-    print(f"Starting Historical Backfill: {from_date} to {to_date} (force={force})")
-    print("=" * 80 + "\n")
+    # Setup file logging for quiet mode / full persistence
+    logs_dir = Path("data/logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file_path = logs_dir / f"backfill_{started_at.strftime('%Y%m%d_%H%M%S')}.log"
+    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s")
+    )
+    logger.addHandler(file_handler)
+
+    if not quiet:
+        print("\n" + "=" * 80)
+        print(f"Starting Historical Backfill: {from_date} to {to_date} (force={force})")
+        print("=" * 80 + "\n")
+    else:
+        print(f"Starting Historical Backfill: {from_date} to {to_date} [quiet mode]")
 
     try:
         downloader = BhavcopyDownloader(
@@ -280,6 +296,8 @@ def run_backfill(
                     }
                 )
                 logger.info("Skipped %s: already fully loaded with default universe.", date_str)
+                if quiet:
+                    print(f"  {date_str} | skipped (already loaded)")
                 continue
 
             # 3. Execute Day Pipeline: Ingest -> Transform -> Load
@@ -415,6 +433,8 @@ def run_backfill(
                         "duration_seconds": round(time.time() - day_start, 2),
                     }
                 )
+                if quiet:
+                    print(f"  {date_str} | ok | rows: {load_metrics['rows_out']}")
             except Exception as e:
                 err_str = str(e).lower()
                 is_connection_error = (
@@ -455,6 +475,11 @@ def run_backfill(
                 continue
 
     finally:
+        try:
+            logger.removeHandler(file_handler)
+            file_handler.close()
+        except Exception:
+            pass
         if should_stop_spark:
             stop_spark_session()
 

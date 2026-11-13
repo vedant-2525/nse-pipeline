@@ -272,3 +272,18 @@ def test_backfill_mid_run_db_outage_halts_immediately(
         assert report["days"][0]["step"] == "load"
         assert report["days"][1]["status"] == "not_attempted"
         assert report["days"][2]["status"] == "not_attempted"
+
+
+def test_backfill_quiet_flag_runs_without_error(tmp_path: Path):
+    """The --quiet flag must not break the backfill run."""
+    from_date = date(2024, 10, 12)  # Saturday
+    to_date = date(2024, 10, 13)  # Sunday
+    exit_code, report = run_backfill(
+        from_date=from_date,
+        to_date=to_date,
+        reports_dir=tmp_path / "reports",
+        spark=MagicMock(),
+        quiet=True,
+    )
+    assert exit_code == 0
+    assert report["summary"]["skipped_non_trading_day"] == 2

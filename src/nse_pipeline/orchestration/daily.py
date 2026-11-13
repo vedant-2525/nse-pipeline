@@ -70,6 +70,7 @@ def run_daily_pipeline(
     reports_dir: Path | str = "data/reports",
     symbols_config: str = "config/symbols.yaml",
     holidays_path: str = "config/holidays.csv",
+    quiet: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Executes the daily pipeline for a single trading day.
 
@@ -128,6 +129,7 @@ def run_daily_pipeline(
         reports_dir=reports_dir,
         symbols_config=symbols_config,
         holidays_path=holidays_path,
+        quiet=quiet,
     )
 
     day_info = bf_report["days"][0] if bf_report.get("days") else {}
