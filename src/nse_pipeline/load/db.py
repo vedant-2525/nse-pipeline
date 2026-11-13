@@ -26,7 +26,7 @@ load_dotenv()
 def get_db_config() -> dict[str, Any]:
     """Retrieves PostgreSQL connection parameters from environment variables."""
     return {
-        "host": os.getenv("POSTGRES_HOST", "localhost"),
+        "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
         "port": int(os.getenv("POSTGRES_PORT", "5432")),
         "dbname": os.getenv("POSTGRES_DB", "nse_warehouse"),
         "user": os.getenv("POSTGRES_USER", "postgres"),

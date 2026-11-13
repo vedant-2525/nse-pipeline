@@ -131,10 +131,11 @@ def log_pipeline_run(
     error: str | None,
     started_at: datetime,
     finished_at: datetime,
+    conn: psycopg.Connection | None = None,
 ) -> None:
     """Logs pipeline execution outcome to ops.pipeline_run_log using an isolated connection."""
     try:
-        with get_db_connection(autocommit=True) as conn:
+        if conn is not None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -155,6 +156,28 @@ def log_pipeline_run(
                         finished_at,
                     ),
                 )
+        else:
+            with get_db_connection(autocommit=True) as new_conn:
+                with new_conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO ops.pipeline_run_log (
+                            run_id, stage, trade_date, status, rows_in, rows_out, error, started_at, finished_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (
+                            run_id,
+                            stage,
+                            trade_date,
+                            status,
+                            rows_in,
+                            rows_out,
+                            error,
+                            started_at,
+                            finished_at,
+                        ),
+                    )
     except Exception as e:
         logger.error("Failed to write to ops.pipeline_run_log: %s", e)
 
@@ -165,10 +188,11 @@ def log_dq_result(
     check_name: str,
     status: str,
     details: str,
+    conn: psycopg.Connection | None = None,
 ) -> None:
     """Records a data quality gate outcome into ops.dq_results."""
     try:
-        with get_db_connection(autocommit=True) as conn:
+        if conn is not None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -177,6 +201,16 @@ def log_dq_result(
                     """,
                     (run_id, stage, check_name, status, details),
                 )
+        else:
+            with get_db_connection(autocommit=True) as new_conn:
+                with new_conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO ops.dq_results (run_id, stage, check_name, status, details)
+                        VALUES (%s, %s, %s, %s, %s);
+                        """,
+                        (run_id, stage, check_name, status, details),
+                    )
     except Exception as e:
         logger.error("Failed to write to ops.dq_results: %s", e)
 
@@ -185,12 +219,13 @@ def log_dq_results(
     run_id: uuid.UUID,
     results: list[dict[str, Any]],
     default_stage: str = "silver",
+    conn: psycopg.Connection | None = None,
 ) -> None:
     """Records multiple data quality check outcomes into ops.dq_results."""
     if not results:
         return
     try:
-        with get_db_connection(autocommit=True) as conn:
+        if conn is not None:
             with conn.cursor() as cur:
                 for r in results:
                     stage = r.get("stage", default_stage)
@@ -208,6 +243,25 @@ def log_dq_results(
                         """,
                         (run_id, stage, name, status, details),
                     )
+        else:
+            with get_db_connection(autocommit=True) as new_conn:
+                with new_conn.cursor() as cur:
+                    for r in results:
+                        stage = r.get("stage", default_stage)
+                        name = r.get("name", r.get("check_name", "unknown"))
+                        status = (
+                            "PASS"
+                            if r.get("passed", True) and r.get("status", "PASS") == "PASS"
+                            else r.get("status", "FAIL")
+                        )
+                        details = r.get("details", "")
+                        cur.execute(
+                            """
+                            INSERT INTO ops.dq_results (run_id, stage, check_name, status, details)
+                            VALUES (%s, %s, %s, %s, %s);
+                            """,
+                            (run_id, stage, name, status, details),
+                        )
     except Exception as e:
         logger.error("Failed to write batch to ops.dq_results: %s", e)
 
@@ -234,7 +288,13 @@ def load_silver_partition(
     logger.info("====================================================================")
 
     # 1. Validate partition metadata before attempting database operations
+    audit_conn = None
     try:
+        try:
+            audit_conn = get_db_connection(autocommit=True)
+        except Exception as ce:
+            logger.warning("Could not establish dedicated audit connection: %s", ce)
+
         meta = validate_partition_metadata(
             partition_dir,
             trade_date,
@@ -248,13 +308,14 @@ def load_silver_partition(
             check_name="partition_metadata_validation",
             status="PASS",
             details=f"Validated _SUCCESS.meta.json (source_type={source_type}, read={meta['read_count']})",
+            conn=audit_conn,
         )
 
         # Record Silver quality check outcomes into ops.dq_results
         silver_checks = meta.get("checks", [])
         t_dq_start = time.time()
         if silver_checks:
-            log_dq_results(run_id=run_id, results=silver_checks, default_stage="silver")
+            log_dq_results(run_id=run_id, results=silver_checks, default_stage="silver", conn=audit_conn)
         t_dq_duration = time.time() - t_dq_start
     except Exception as e:
         finished_at = datetime.now(UTC)
@@ -268,6 +329,7 @@ def load_silver_partition(
             error=str(e),
             started_at=started_at,
             finished_at=finished_at,
+            conn=audit_conn,
         )
         log_dq_result(
             run_id=run_id,
@@ -275,7 +337,13 @@ def load_silver_partition(
             check_name="partition_metadata_validation",
             status="FAIL",
             details=str(e),
+            conn=audit_conn,
         )
+        if audit_conn is not None:
+            try:
+                audit_conn.close()
+            except Exception:
+                pass
         raise
 
     # 2. Read Parquet files via PyArrow
@@ -449,6 +517,7 @@ def load_silver_partition(
             error=None,
             started_at=started_at,
             finished_at=finished_at,
+            conn=audit_conn,
         )
         log_dq_result(
             run_id=run_id,
@@ -456,6 +525,7 @@ def load_silver_partition(
             check_name="fact_upsert_check",
             status="PASS",
             details=f"Upserted {rows_out} rows into gold.fact_daily_price (rows_in={rows_in})",
+            conn=audit_conn,
         )
         t_runlog_duration = time.time() - t_runlog_start
 
@@ -500,6 +570,7 @@ def load_silver_partition(
             error=str(e),
             started_at=started_at,
             finished_at=finished_at,
+            conn=audit_conn,
         )
         log_dq_result(
             run_id=run_id,
@@ -507,9 +578,15 @@ def load_silver_partition(
             check_name="fact_upsert_check",
             status="FAIL",
             details=f"Transaction rolled back: {e}",
+            conn=audit_conn,
         )
         raise
 
     finally:
+        if audit_conn is not None:
+            try:
+                audit_conn.close()
+            except Exception:
+                pass
         if should_close_conn and active_conn:
             active_conn.close()
