@@ -55,6 +55,7 @@ switch ($Task) {
     }
     "dashboard" {
         Write-Host "--> Starting Streamlit Dashboard..." -ForegroundColor Cyan
+        $env:PYTHONPATH = (Get-Location).Path
         & $StreamlitExe run dashboard/app.py --server.address localhost
     }
     "backfill" {

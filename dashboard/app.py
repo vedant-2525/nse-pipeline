@@ -9,7 +9,14 @@ Provides a read-only window onto the PostgreSQL warehouse:
 - Suspected corporate actions (ex-date splits, bonus issues, and divergences)
 """
 
+import sys
 from datetime import date
+from pathlib import Path
+
+# Ensure project root is in sys.path when running via 'streamlit run dashboard/app.py'
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import streamlit as st
 
@@ -67,15 +74,16 @@ with col4:
 
 # Freshness indicator
 today = date.today()
-days_lag = (today - summary["latest_date"]).days
-if days_lag <= 3:
-    st.success(
-        f"Data is fresh. Latest trading session: {summary['latest_date']} ({days_lag} calendar days ago)."
-    )
-else:
-    st.info(
-        f"Latest data in warehouse is from {summary['latest_date']} ({days_lag} calendar days ago)."
-    )
+if summary["latest_date"]:
+    days_lag = (today - summary["latest_date"]).days
+    if days_lag <= 3:
+        st.success(
+            f"Data is fresh. Latest trading session: {summary['latest_date']} ({days_lag} calendar days ago)."
+        )
+    else:
+        st.info(
+            f"Latest data in warehouse is from {summary['latest_date']} ({days_lag} calendar days ago)."
+        )
 
 st.divider()
 
