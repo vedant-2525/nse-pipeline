@@ -315,7 +315,9 @@ def load_silver_partition(
         silver_checks = meta.get("checks", [])
         t_dq_start = time.time()
         if silver_checks:
-            log_dq_results(run_id=run_id, results=silver_checks, default_stage="silver", conn=audit_conn)
+            log_dq_results(
+                run_id=run_id, results=silver_checks, default_stage="silver", conn=audit_conn
+            )
         t_dq_duration = time.time() - t_dq_start
     except Exception as e:
         finished_at = datetime.now(UTC)

@@ -18,9 +18,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-import streamlit as st
+import streamlit as st  # noqa: E402
 
-from dashboard.queries import (
+from dashboard.queries import (  # noqa: E402
     fetch_available_symbols,
     fetch_date_range,
     fetch_market_movers,
