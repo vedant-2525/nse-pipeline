@@ -231,7 +231,10 @@ def fetch_recent_pipeline_runs(limit: int = 10) -> pd.DataFrame:
     """
     try:
         with get_db_connection(autocommit=True) as conn:
-            return pd.read_sql_query(query, conn, params=[limit])
+            df = pd.read_sql_query(query, conn, params=[limit])
+            if "run_id" in df.columns:
+                df["run_id"] = df["run_id"].astype(str)
+            return df
     except Exception:
         return pd.DataFrame()
 
@@ -256,7 +259,10 @@ def fetch_recent_dq_failures(limit: int = 10) -> pd.DataFrame:
     """
     try:
         with get_db_connection(autocommit=True) as conn:
-            return pd.read_sql_query(query, conn, params=[limit])
+            df = pd.read_sql_query(query, conn, params=[limit])
+            if "run_id" in df.columns:
+                df["run_id"] = df["run_id"].astype(str)
+            return df
     except Exception:
         return pd.DataFrame()
 
