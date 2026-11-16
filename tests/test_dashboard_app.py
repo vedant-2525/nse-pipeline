@@ -68,12 +68,8 @@ def test_dashboard_apptest_all_sections_synthetic_data():
             "return_vs_lag_close": [0.5, 0.74],
         }
     )
-    mock_gainers = pd.DataFrame(
-        {"symbol": ["INFY"], "close": [1800.0], "return_pct": [2.5]}
-    )
-    mock_losers = pd.DataFrame(
-        {"symbol": ["TCS"], "close": [3900.0], "return_pct": [-1.2]}
-    )
+    mock_gainers = pd.DataFrame({"symbol": ["INFY"], "close": [1800.0], "return_pct": [2.5]})
+    mock_losers = pd.DataFrame({"symbol": ["TCS"], "close": [3900.0], "return_pct": [-1.2]})
     mock_sector = pd.DataFrame(
         {
             "sector": ["Information Technology"],
@@ -131,9 +127,7 @@ def test_dashboard_apptest_all_sections_synthetic_data():
         patch("dashboard.queries.fetch_sector_performance", return_value=mock_sector),
         patch("dashboard.queries.fetch_recent_pipeline_runs", return_value=mock_runs),
         patch("dashboard.queries.fetch_recent_dq_failures", return_value=mock_dq),
-        patch(
-            "dashboard.queries.fetch_suspected_corporate_actions", return_value=mock_ca
-        ),
+        patch("dashboard.queries.fetch_suspected_corporate_actions", return_value=mock_ca),
     ):
         at = AppTest.from_file("dashboard/app.py", default_timeout=20)
         at.run()
@@ -198,10 +192,7 @@ def test_dashboard_apptest_empty_data_states():
     info_texts = [i.value for i in at.info]
     assert "No symbol data available to explore." in info_texts
     assert "No pipeline run records logged yet." in info_texts
-    assert (
-        "No suspected corporate actions detected in current warehouse data."
-        in info_texts
-    )
+    assert "No suspected corporate actions detected in current warehouse data." in info_texts
     success_texts = [s.value for s in at.success]
     assert any("No failed data quality checks recorded" in s for s in success_texts)
 
