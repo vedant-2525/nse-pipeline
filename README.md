@@ -119,7 +119,7 @@ Copy-Item .env.example .env
 ```
 Ensure your `.env` contains:
 ```env
-POSTGRES_HOST=localhost
+POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5432
 POSTGRES_DB=nse_warehouse
 POSTGRES_USER=postgres
@@ -138,20 +138,38 @@ python -m nse_pipeline.cli db init
 ### 4. Run the Pipeline
 ```powershell
 # Run single daily pipeline (resolves latest published trading session based on 19:00 IST cutoff)
-python -m nse_pipeline.cli daily
+python -m nse_pipeline.cli daily -q
 
 # Or run for a specific historical date
-python -m nse_pipeline.cli daily --date 2024-10-15
+python -m nse_pipeline.cli daily --date 2024-10-15 -q
 
-# Run historical backfill across a date range
-python -m nse_pipeline.cli backfill --from 2024-10-14 --to 2024-10-18
+# Run historical backfill across a date range in quiet mode
+python -m nse_pipeline.cli backfill --from 2024-10-14 --to 2024-10-18 -q
 ```
+
+### Sample Run & Benchmarks
+
+Real backfill execution across 15 calendar days (10 trading sessions) in quiet mode:
+```powershell
+python -m nse_pipeline.cli backfill --from 2025-03-17 --to 2025-03-31 -q
+```
+Summary totals produced:
+```
+Total Days: 15 | Trading: 10 | OK: 10 | Skipped (Done): 0 | Skipped (Off): 5 | Failed: 0 | Not Attempted: 0
+Execution Duration: 70.78s | Audit Report: data\reports\backfill_report_20261113_145801.json
+```
+
+Measured per-day database load breakdown (`[PROFILE]` log on 2024-10-15 using `127.0.0.1` and shared audit connection):
+```
+[PROFILE] Load breakdown for 2024-10-15: conn=0.013s, pyarrow_read=0.027s, staging_copy=0.008s, fact_upsert=0.006s, dq_results=0.019s, run_log=0.006s
+```
+Connecting via IPv4 (`127.0.0.1`) reduced connection overhead from ~3.1s to ~0.013s (~230x speedup), bypassing the Windows IPv6 DNS fallback delay.
 
 ### 5. Launch the Dashboard
 ```powershell
 .\scripts\tasks.ps1 dashboard
 # Or directly:
-streamlit run dashboard/app.py --server.address localhost
+streamlit run dashboard/app.py --server.address 127.0.0.1
 ```
 Open `http://localhost:8501` in your browser.
 
@@ -195,9 +213,10 @@ Key architectural decisions recorded in `docs/DECISIONS.md`:
 
 ## Known Limitations & Edge Cases
 
-1. **Exchange-Adjusted vs Unadjusted Prices:** Real measured data shows that on bonus issue ex-dates (e.g. RELIANCE on 2024-10-28), NSE bhavcopy retains unadjusted `prev_close` while close drops ~50%. The view `gold.vw_suspected_corporate_actions` flags these events, but prices in `fact_daily_price` are preserved as raw executed trades.
-2. **Sparse Data History Ramp-Up:** Moving average views (`ma_20d`, `ma_50d`) and volatility views (`volatility_20d`) evaluate strictly to `NULL` until a contiguous sequence of trading sessions is present.
-3. **Single-Node Execution:** Spark runs in `local[*]` mode; this is optimized for single-machine engineering workstations rather than multi-node EMR/Databricks clusters.
+1. **Explicit Implementation Boundaries:** Apache Airflow, Docker container packaging of the Python/Spark pipeline application, and cloud infrastructure deployment (AWS/GCP) are **not implemented** in this project. Orchestration is provided natively via the CLI and Windows Task Scheduler, while PostgreSQL runs in a local Docker container.
+2. **Exchange-Adjusted vs Unadjusted Prices:** Real measured data shows that on corporate action ex-dates (e.g. RELIANCE on 2024-10-28), NSE bhavcopy retains unadjusted `prev_close` while close drops ~50%. The view `gold.vw_suspected_corporate_actions` flags these events based on price divergence, but prices in `fact_daily_price` are preserved as raw executed trades.
+3. **Sparse Data History Ramp-Up:** Moving average views (`ma_20d`, `ma_50d`) and volatility views (`volatility_20d`) evaluate strictly to `NULL` until a contiguous sequence of trading sessions is present.
+4. **Single-Node Execution:** Spark runs in `local[*]` mode; this is optimized for single-machine engineering workstations rather than multi-node EMR/Databricks clusters.
 
 ---
 
@@ -219,6 +238,8 @@ Screenshots of the Streamlit dashboard are maintained in `docs/images/`:
 
 ---
 
-## Educational Disclaimer
+## Data & Disclaimer
 
 This data engineering pipeline is created strictly for **educational and portfolio demonstration purposes**. Market data processed by this pipeline is sourced from public National Stock Exchange of India (NSE) daily historical archives. This project is not affiliated with, endorsed by, or sponsored by the National Stock Exchange of India Ltd.
+
+**Not Investment Advice:** Nothing in this repository constitutes financial, investment, legal, or tax advice. All data and calculations are provided as-is without warranty of any kind.
