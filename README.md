@@ -123,7 +123,7 @@ POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5432
 POSTGRES_DB=nse_warehouse
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
+POSTGRES_PASSWORD=change_me
 ```
 
 ### 3. Start Database & Initialize Warehouse

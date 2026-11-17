@@ -24,13 +24,24 @@ load_dotenv()
 
 
 def get_db_config() -> dict[str, Any]:
-    """Retrieves PostgreSQL connection parameters from environment variables."""
+    """Retrieves PostgreSQL connection parameters from environment variables.
+
+    Raises:
+        RuntimeError: If POSTGRES_PASSWORD is not set in the environment.
+    """
+    password = os.getenv("POSTGRES_PASSWORD")
+    if password is None:
+        raise RuntimeError(
+            "POSTGRES_PASSWORD environment variable is not set. "
+            "Copy .env.example to .env and set POSTGRES_PASSWORD=change_me "
+            "(or your actual password)."
+        )
     return {
         "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
         "port": int(os.getenv("POSTGRES_PORT", "5432")),
         "dbname": os.getenv("POSTGRES_DB", "nse_warehouse"),
         "user": os.getenv("POSTGRES_USER", "postgres"),
-        "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
+        "password": password,
         "connect_timeout": 3,
     }
 
