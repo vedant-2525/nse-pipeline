@@ -214,9 +214,11 @@ Key architectural decisions recorded in `docs/DECISIONS.md`:
 ## Known Limitations & Edge Cases
 
 1. **Explicit Implementation Boundaries:** Apache Airflow, Docker container packaging of the Python/Spark pipeline application, and cloud infrastructure deployment (AWS/GCP) are **not implemented** in this project. Orchestration is provided natively via the CLI and Windows Task Scheduler, while PostgreSQL runs in a local Docker container.
-2. **Exchange-Adjusted vs Unadjusted Prices:** Real measured data shows that on corporate action ex-dates (e.g. RELIANCE on 2024-10-28), NSE bhavcopy retains unadjusted `prev_close` while close drops ~50%. The view `gold.vw_suspected_corporate_actions` flags these events based on price divergence, but prices in `fact_daily_price` are preserved as raw executed trades.
-3. **Sparse Data History Ramp-Up:** Moving average views (`ma_20d`, `ma_50d`) and volatility views (`volatility_20d`) evaluate strictly to `NULL` until a contiguous sequence of trading sessions is present.
-4. **Single-Node Execution:** Spark runs in `local[*]` mode; this is optimized for single-machine engineering workstations rather than multi-node EMR/Databricks clusters.
+2. **Weekend Sessions and Discontinuous Returns:** The calendar treats every weekend as non-trading, so special weekend trading sessions (such as the Union Budget session on Saturday 2025-02-01) are not loaded in the standard automated schedule. As a result, price returns across weekend sessions span two trading sessions. (Check result: downloading the 2025-02-01 file with `--force` confirms an official file exists, with TRENT's close in it at 6,189.50; because this Saturday session was unpopulated in the standard weekday schedule, TRENT's Monday 2025-02-03 file had `prev_close` = 6,189.50, diverging by 7.58% from Friday's close of 5,753.20).
+3. **Suspected Actions Cannot Distinguish Splits from Crashes:** The view `gold.vw_suspected_corporate_actions` flags large price moves (>20%) and `prev_close` discrepancies (>5%), but cannot algorithmically distinguish true splits/bonuses from genuine price crashes or unpopulated sessions without external corporate action master data.
+4. **Unadjusted History Distorts Moving Averages:** Price history in `gold.fact_daily_price` preserves unadjusted executed cash settlement prices. Because historical prices are not backward split-adjusted, moving averages (`ma_20d`, `ma_50d`) that span a split or large corporate action show a false dip until the pre-split prices roll out of the window frame.
+5. **Sparse Data History Ramp-Up:** Moving average views (`ma_20d`, `ma_50d`) and volatility views (`volatility_20d`) evaluate strictly to `NULL` until a contiguous sequence of trading sessions is present.
+6. **Single-Node Execution:** Spark runs in `local[*]` mode; this is optimized for single-machine engineering workstations rather than multi-node EMR/Databricks clusters.
 
 ---
 
