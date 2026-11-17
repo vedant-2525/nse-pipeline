@@ -328,10 +328,87 @@ def test_db_init_and_dimensions_integration(postgres_test_db):
             assert cur.fetchone()[0] == 366
 
 
+def _ensure_test_silver_partition(
+    trade_date: date,
+    silver_base_dir: str | Path = "data/silver/equity_prices",
+    sectors_path: str | Path = "config/sectors.csv",
+) -> Path:
+    """Ensures a compliant silver partition exists for integration tests.
+
+    If the partition directory already exists with parquet and meta (local dev),
+    it is left untouched. In fresh CI environments where data/ is gitignored,
+    this helper synthesizes the 51-symbol test partition.
+    """
+    import csv
+
+    p_dir = Path(silver_base_dir) / f"trade_date={trade_date.strftime('%Y-%m-%d')}"
+    meta_file = p_dir / "_SUCCESS.meta.json"
+    if p_dir.is_dir() and meta_file.is_file() and list(p_dir.glob("*.parquet")):
+        return p_dir
+
+    p_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(sectors_path, encoding="utf-8") as f:
+        symbols = [row["symbol"].strip().upper() for row in csv.DictReader(f) if row.get("symbol")]
+
+    rows = []
+    for sym in symbols:
+        rows.append(
+            {
+                "symbol": sym,
+                "series": "EQ",
+                "isin": f"INE{sym[:6].ljust(6, '0')}0101",
+                "open": 100.0,
+                "high": 105.0,
+                "low": 95.0,
+                "close": 102.0,
+                "last": 102.0,
+                "prev_close": 100.0,
+                "volume": 10000,
+                "turnover": 1020000.0,
+                "trades": 500,
+                "source_format": "udiff",
+                "source_file": "sample.csv",
+                "trade_date": trade_date,
+            }
+        )
+    df = pd.DataFrame(rows)
+    df.to_parquet(p_dir / "part-00000.parquet")
+
+    checks = [
+        {"name": "row_count_bounds", "passed": True, "details": "51 within bounds"},
+        {"name": "partition_date_match", "passed": True, "details": "Match partition"},
+        {"name": "duplicate_keys", "passed": True, "details": "Zero duplicates"},
+        {"name": "high_low_invariant", "passed": True, "details": "High >= Low"},
+        {"name": "price_bounds", "passed": True, "details": "Price within bounds"},
+        {"name": "positive_prices", "passed": True, "details": "Prices positive"},
+        {"name": "volume_non_negative", "passed": True, "details": "Volume non-negative"},
+        {"name": "reject_rate_gate", "passed": True, "details": "0% quarantined"},
+        {"name": "row_reconciliation_gate", "passed": True, "details": "Balanced"},
+    ]
+    meta = {
+        "trade_date": trade_date.strftime("%Y-%m-%d"),
+        "read_count": len(symbols),
+        "non_equity_filtered": 0,
+        "universe_filtered": 0,
+        "rejected": 0,
+        "deduped": 0,
+        "row_count": len(symbols),
+        "universe": "default_list",
+        "symbol_count": len(symbols),
+        "source_format": "udiff",
+        "source_type": "official",
+        "checks": checks,
+    }
+    meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return p_dir
+
+
 @requires_postgres
 def test_load_silver_partition_idempotency_integration(postgres_test_db):
     """Verify loading the same day twice produces identical counts and no duplicate rows."""
     trade_date = date(2024, 10, 11)
+    _ensure_test_silver_partition(trade_date)
 
     # Initial load
     res1 = load_silver_partition(trade_date, silver_base_dir="data/silver/equity_prices")
@@ -353,6 +430,7 @@ def test_load_silver_partition_idempotency_integration(postgres_test_db):
 def test_load_persists_silver_dq_checks_to_ops(postgres_test_db):
     """Verify that silver checks from _SUCCESS.meta.json are persisted to ops.dq_results on load."""
     trade_date = date(2024, 10, 11)
+    _ensure_test_silver_partition(trade_date)
 
     # Load the partition (meta has 9 'checks' entries)
     res = load_silver_partition(trade_date, silver_base_dir="data/silver/equity_prices")
@@ -383,6 +461,8 @@ def test_load_two_days_partition_isolation_integration(postgres_test_db):
     """Verify loading day B does not alter or corrupt day A rows."""
     d1 = date(2024, 10, 11)
     d2 = date(2024, 1, 15)
+    _ensure_test_silver_partition(d1)
+    _ensure_test_silver_partition(d2)
 
     load_silver_partition(d1, silver_base_dir="data/silver/equity_prices")
     load_silver_partition(d2, silver_base_dir="data/silver/equity_prices")

@@ -246,14 +246,15 @@ def fetch_recent_dq_failures(limit: int = 10) -> pd.DataFrame:
 
     query = """
         SELECT
-            check_id,
+            result_id,
             run_id,
+            stage,
             check_name,
-            passed,
+            status,
             details,
             checked_at
         FROM ops.dq_results
-        WHERE passed = FALSE
+        WHERE status = 'FAIL'
         ORDER BY checked_at DESC
         LIMIT %s;
     """

@@ -92,10 +92,11 @@ def test_dashboard_apptest_all_sections_synthetic_data():
     )
     mock_dq = pd.DataFrame(
         {
-            "check_id": [1],
+            "result_id": [1],
             "run_id": ["test-uuid-1"],
+            "stage": ["silver"],
             "check_name": ["price_bounds"],
-            "passed": [False],
+            "status": ["FAIL"],
             "details": ["synthetic DQ failure"],
             "checked_at": ["2025-03-28 19:00:01"],
         }

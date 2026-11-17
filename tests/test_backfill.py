@@ -66,7 +66,8 @@ def test_is_already_fully_done_requires_all_three_layers(tmp_path: Path):
         assert is_already_fully_done(trade_date, bronze_dir, silver_dir) is True
 
 
-def test_backfill_skips_non_trading_days(tmp_path: Path):
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True)
+def test_backfill_skips_non_trading_days(mock_reachable, tmp_path: Path):
     """Verify weekends and holidays are marked as skipped_non_trading_day."""
     # 2024-10-12 is Saturday, 2024-10-13 is Sunday
     from_date = date(2024, 10, 12)
@@ -86,8 +87,9 @@ def test_backfill_skips_non_trading_days(tmp_path: Path):
     assert report["summary"]["failed"] == 0
 
 
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True)
 @patch("nse_pipeline.orchestration.backfill.is_already_fully_done", return_value=True)
-def test_backfill_idempotent_skips_already_loaded(mock_done, tmp_path: Path):
+def test_backfill_idempotent_skips_already_loaded(mock_done, mock_reachable, tmp_path: Path):
     """Verify days already completed are marked as skipped_already_loaded."""
     # 2024-10-14 is Monday (trading day)
     from_date = date(2024, 10, 14)
@@ -106,12 +108,13 @@ def test_backfill_idempotent_skips_already_loaded(mock_done, tmp_path: Path):
     assert report["days"][0]["status"] == "skipped_already_loaded"
 
 
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True)
 @patch("nse_pipeline.orchestration.backfill.is_already_fully_done", return_value=False)
 @patch("nse_pipeline.orchestration.backfill.load_silver_partition", return_value={"rows_out": 51})
 @patch("nse_pipeline.orchestration.backfill.run_silver_transform", return_value={"kept_count": 51})
 @patch("nse_pipeline.orchestration.backfill.BhavcopyDownloader")
 def test_backfill_success_across_range(
-    mock_downloader_cls, mock_transform, mock_load, mock_done, tmp_path: Path
+    mock_downloader_cls, mock_transform, mock_load, mock_done, mock_reachable, tmp_path: Path
 ):
     """Verify successful end-to-end backfill marks trading days ok and creates JSON report."""
     mock_downloader = MagicMock()
@@ -142,9 +145,12 @@ def test_backfill_success_across_range(
     assert saved_report["summary"]["ok"] == 2
 
 
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True)
 @patch("nse_pipeline.orchestration.backfill.is_already_fully_done", return_value=False)
 @patch("nse_pipeline.orchestration.backfill.BhavcopyDownloader")
-def test_backfill_stops_immediately_on_rate_limit(mock_downloader_cls, mock_done, tmp_path: Path):
+def test_backfill_stops_immediately_on_rate_limit(
+    mock_downloader_cls, mock_done, mock_reachable, tmp_path: Path
+):
     """Verify HTTP 429/430 halts execution and marks subsequent dates as not_attempted."""
     mock_downloader = MagicMock()
     # First day raises 429 rate limit
@@ -172,12 +178,13 @@ def test_backfill_stops_immediately_on_rate_limit(mock_downloader_cls, mock_done
     assert report["days"][2]["status"] == "not_attempted"
 
 
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True)
 @patch("nse_pipeline.orchestration.backfill.is_already_fully_done", return_value=False)
 @patch("nse_pipeline.orchestration.backfill.load_silver_partition", return_value={"rows_out": 51})
 @patch("nse_pipeline.orchestration.backfill.run_silver_transform", return_value={"kept_count": 51})
 @patch("nse_pipeline.orchestration.backfill.BhavcopyDownloader")
 def test_backfill_continues_past_non_rate_limit_failure(
-    mock_downloader_cls, mock_transform, mock_load, mock_done, tmp_path: Path
+    mock_downloader_cls, mock_transform, mock_load, mock_done, mock_reachable, tmp_path: Path
 ):
     """Verify non-rate-limit failures (e.g. missing official file) record failure and continue."""
     mock_downloader = MagicMock()
@@ -274,7 +281,8 @@ def test_backfill_mid_run_db_outage_halts_immediately(
         assert report["days"][2]["status"] == "not_attempted"
 
 
-def test_backfill_quiet_flag_runs_without_error(tmp_path: Path):
+@patch("nse_pipeline.orchestration.backfill.is_postgres_reachable", return_value=True)
+def test_backfill_quiet_flag_runs_without_error(mock_reachable, tmp_path: Path):
     """The --quiet flag must not break the backfill run."""
     from_date = date(2024, 10, 12)  # Saturday
     to_date = date(2024, 10, 13)  # Sunday
