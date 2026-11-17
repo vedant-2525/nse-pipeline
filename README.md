@@ -207,7 +207,7 @@ Key architectural decisions recorded in `docs/DECISIONS.md`:
 5. **ADR 005 - PostgreSQL Star Schema & Idempotent Staging:** Implemented atomic per-day partition loading via staging tables and UPSERTs.
 6. **ADR 006 - Universe Gating:** Prevented accidental loading of full-market (~1,900 stocks) partitions into the curated Nifty 50 warehouse without explicit flags.
 7. **ADR 007 - Holiday Missing Coverage Warning:** Emitted clear operational alerts whenever a requested year is absent from `config/holidays.csv`.
-8. **ADR 008 - Trading-Row Window Views & Corporate Action Detection:** Financial indicators operate over consecutive trading rows (`trading_day_seq`) rather than calendar day spans. Detected ex-date splits and bonus issues via divergence thresholds while preserving raw executed price integrity.
+8. **ADR 008 - Trading-Row Window Views & Corporate Action Detection:** Financial indicators operate over consecutive trading rows (`trading_day_seq`) rather than calendar day spans. Flagged suspected corporate actions via price divergence thresholds while preserving raw executed price integrity.
 
 ---
 
@@ -234,7 +234,7 @@ Key architectural decisions recorded in `docs/DECISIONS.md`:
 Screenshots of the Streamlit dashboard are maintained in `docs/images/`:
 - `docs/images/dashboard_overview.png` - Overview cards, data freshness status, and KPI summary.
 - `docs/images/stock_explorer.png` - Moving averages (20d/50d SMA), volume charts, and daily return history.
-- `docs/images/corporate_actions.png` - Suspected corporate actions view (ex-date splits, bonus issue divergence).
+- `docs/images/corporate_actions.png` - Suspected corporate actions view (large price movements and prev_close discrepancies).
 
 ---
 

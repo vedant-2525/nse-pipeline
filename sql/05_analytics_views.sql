@@ -317,14 +317,17 @@ ORDER BY trade_date, avg_daily_return DESC;
 
 -- ------------------------------------------------------------------------------
 -- 7. gold.vw_suspected_corporate_actions
--- Detects corporate action ex-dates (stock splits, bonus share issues, capital reductions).
+-- Flags trading days where the close moved >20% versus the previous loaded trading day,
+-- or where the file's prev_close differs from the previous loaded close by >5%.
+-- Possible causes include splits, bonus issues, genuine price crashes and missing sessions;
+-- verify before concluding.
 --
--- Logic against real measured evidence (E1):
+-- Logic against real measured evidence:
 -- 1. Compares strictly CONSECUTIVE trading days (prev_trading_day_seq = trading_day_seq - 1).
 --    This completely eliminates false positives caused by calendar/loading gaps (e.g. 270-day gap).
--- 2. On ex-dates:
---    - When exchange adjusts prev_close: |prev_close(t) - close(t-1)| / close(t-1) > 0.05 (5%).
---    - When exchange leaves prev_close unadjusted (measured in RELIANCE on 2024-10-28 1:1 bonus where
+-- 2. Flags:
+--    - When file prev_close differs from previous loaded close: |prev_close(t) - close(t-1)| / close(t-1) > 0.05 (5%).
+--    - When close moved >20% vs previous loaded close (measured in RELIANCE on 2024-10-28 1:1 bonus where
 --      close dropped from 2655.70 to 1334.35 while prev_close remained unadjusted at 2655.70):
 --      |close(t) - close(t-1)| / close(t-1) > 0.20 (20% price drop/gain).
 -- ------------------------------------------------------------------------------
@@ -356,8 +359,8 @@ SELECT
     symbol,
     company_name,
     trade_date,
-    lag_close AS unadjusted_yesterday_close,
-    prev_close AS exchange_adjusted_prev_close,
+    lag_close AS previous_loaded_close,
+    prev_close AS file_prev_close,
     close AS current_close,
     ROUND(ABS(prev_close - lag_close) / NULLIF(lag_close, 0), 4) AS discrepancy_ratio,
     ROUND(((close - lag_close) / NULLIF(lag_close, 0)) * 100.0, 2) AS return_vs_lag_pct,

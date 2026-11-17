@@ -6,7 +6,7 @@ Provides a read-only window onto the PostgreSQL warehouse:
 - Market movers (top 5 gainers and losers for chosen date)
 - Sector performance (industry breakdown bar chart)
 - Pipeline health (ops.pipeline_run_log and failed data quality checks)
-- Suspected corporate actions (ex-date splits, bonus issues, and divergences)
+- Suspected corporate actions (large price movements and prev_close discrepancies)
 """
 
 import sys
@@ -226,7 +226,10 @@ st.divider()
 # ==============================================================================
 st.header("6. Suspected Corporate Actions (gold.vw_suspected_corporate_actions)")
 st.caption(
-    "Flagged ex-dates where exchange adjusted prev_close (>5% gap) or where raw close moved >20% across adjacent trading days."
+    "Trading days where the close moved more than 20% versus the previous loaded trading day, "
+    "or where the file's prev_close differs from the previous loaded close by more than 5%. "
+    "Possible causes include splits, bonus issues, genuine price crashes and missing sessions; "
+    "verify before concluding."
 )
 
 df_actions = fetch_suspected_corporate_actions()

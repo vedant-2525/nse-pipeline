@@ -396,17 +396,17 @@ def test_view_volume_spikes(postgres_test_db):
 
 @requires_postgres
 def test_view_suspected_corporate_actions(postgres_test_db):
-    """Verify gold.vw_suspected_corporate_actions identifies ex-date split/bonus divergence.
+    """Verify gold.vw_suspected_corporate_actions identifies price/prev_close divergence.
 
     Hand-calculated numbers:
     Day 1 (2024-01-01): close = 2,000.00, prev_close = 1,980.00
-    Day 2 (2024-01-02, 2:1 Stock Split Ex-Date):
-      Unadjusted yesterday close (lag_close) = 2,000.00
-      Exchange-adjusted prev_close = 1,000.00 (split halved the base price)
+    Day 2 (2024-01-02):
+      Previous loaded close (lag_close) = 2,000.00
+      File prev_close = 1,000.00 (file adjusted base price)
       Current close = 1,020.00
       discrepancy_ratio = |1,000.00 - 2,000.00| / 2,000.00 = 1,000 / 2,000 = 0.5000 (50.0%)
-      return_vs_lag_pct = (1,020 - 2,000) / 2,000 = -49.00% (artificial crash)
-      return_vs_prev_close_pct = (1,020 - 1,000) / 1,000 = +2.00% (true market gain)
+      return_vs_lag_pct = (1,020 - 2,000) / 2,000 = -49.00%
+      return_vs_prev_close_pct = (1,020 - 1,000) / 1,000 = +2.00%
 
     Because 0.5000 > 0.05 (tolerance threshold), this row is flagged as a suspected corporate action.
     """
@@ -416,7 +416,7 @@ def test_view_suspected_corporate_actions(postgres_test_db):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM gold.fact_daily_price WHERE symbol_id = %s;", (sym_id,))
 
-            # Day 1: normal trading day before split
+            # Day 1: normal trading day before price drop
             cur.execute(
                 """
                 INSERT INTO gold.fact_daily_price (
@@ -426,7 +426,7 @@ def test_view_suspected_corporate_actions(postgres_test_db):
                 """,
                 (sym_id,),
             )
-            # Day 2: 2:1 Stock split ex-date
+            # Day 2: Price drop session
             cur.execute(
                 """
                 INSERT INTO gold.fact_daily_price (
@@ -439,7 +439,7 @@ def test_view_suspected_corporate_actions(postgres_test_db):
 
             cur.execute(
                 """
-                SELECT symbol, trade_date, unadjusted_yesterday_close, exchange_adjusted_prev_close,
+                SELECT symbol, trade_date, previous_loaded_close, file_prev_close,
                        current_close, discrepancy_ratio, return_vs_lag_pct, return_vs_prev_close_pct
                 FROM gold.vw_suspected_corporate_actions
                 WHERE symbol = 'SPLITCORP';

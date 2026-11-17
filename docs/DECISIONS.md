@@ -268,12 +268,12 @@ Phase 4 requires computing rolling financial analytics (daily returns, 20d/50d m
 1. **Trading-Row Windowing vs Calendar-Day Windows:**
    - Technical market indicators (e.g. 20-day SMA, 20-day volatility) must operate over active trading rows (`ROWS BETWEEN 19 PRECEDING AND CURRENT ROW`) rather than calendar day spans (`INTERVAL '20 days'`).
    - Calendar intervals produce variable sample sizes (12 to 15 sessions) due to weekends and holidays, corrupting statistical variance and moving average comparability.
-2. **Corporate Action Detection & Raw Price Integrity:**
+2. **Suspected Corporate Action Detection & Raw Price Integrity:**
    - Raw bhavcopy prices reflect actual executed cash settlement prices (auditable historical truth).
-   - Real-world observation on corporate actions: On ex-dates, some exchanges/sources adjust `prev_close` downward to match post-split parity, while yesterday's executed close (`lag_close`) remains unadjusted. However, real measured data from NSE (e.g. RELIANCE on 2024-10-28 1:1 bonus issue, and DRREDDY on 2024-10-28 1:5 stock split) demonstrates that NSE's bhavcopy `prev_close` can also remain unadjusted (equal to unadjusted close $2655.70), while the close drops dramatically (-49.76% and -79.87%).
-   - `gold.vw_suspected_corporate_actions` detects ex-dates strictly across consecutive trading sessions (`prev_trading_day_seq = trading_day_seq - 1`) using two complementary conditions:
-     a) `|prev_close - lag_close| / lag_close > 0.05` (exchange-adjusted `prev_close` divergence > 5%), OR
-     b) `|close - lag_close| / lag_close > 0.20` (unadjusted `prev_close` with > 20% single-day price movement).
+   - Real-world observation on corporate actions: In some cases, exchanges/sources adjust `prev_close` downward to match post-split parity, while yesterday's executed close (`lag_close`) remains unadjusted. However, real measured data from NSE (e.g. RELIANCE on 2024-10-28, and DRREDDY on 2024-10-28) demonstrates that NSE's bhavcopy `prev_close` can also remain unadjusted (equal to yesterday's close), while the close drops dramatically (-49.76% and -79.87%).
+   - `gold.vw_suspected_corporate_actions` flags trading sessions strictly across consecutive trading sessions (`prev_trading_day_seq = trading_day_seq - 1`) using two complementary conditions:
+     a) `|prev_close - lag_close| / lag_close > 0.05` (file `prev_close` vs previous loaded close divergence > 5%), OR
+     b) `|close - lag_close| / lag_close > 0.20` (> 20% single-day price movement versus previous loaded close).
    - We consciously do NOT silently mutate historical prices. Full retrospective backward chain-adjustment is deferred to downstream portfolio analytics.
 3. **Database Views vs Materialized Tables:**
    - Analytical views (`gold.vw_*`) compute dynamic indicators on-the-fly without storage duplication or cache staleness.

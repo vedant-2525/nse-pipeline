@@ -164,10 +164,10 @@ A companion study guide for interviews, explaining the concepts, design rational
 4. **Excluding Current Row from Baselines (Volume Spikes):**
    - When detecting anomalies (such as volume spikes exceeding 2x the 20-day average), the window frame must be defined as `ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING`.
    - Including the current day's anomalous volume in its own baseline would artificially elevate the average, causing true spikes to be under-detected.
-5. **Corporate Action Price Adjustments:**
-   - Raw transaction prices in exchange bhavcopies are unadjusted (actual money paid).
-   - On an ex-date for a 2:1 stock split, the stock trades at half the price. If calculated as `(close - lag_close) / lag_close`, it appears as a catastrophic -50% loss.
-   - The exchange provides an adjusted `prev_close` on ex-dates to calculate true performance (`return_vs_prev_close`). Comparing `prev_close` with `lag_close` detects corporate actions cleanly (`discrepancy_ratio > 0.05`).
+5. **Handling Corporate Actions and Sharp Price Movements:**
+   - Raw transaction prices in exchange bhavcopies are unadjusted (actual executed settlement prices).
+   - When a stock undergoes a 2:1 stock split or 1:1 bonus issue, the share price drops roughly in half. Calculating simple returns as `(close - lag_close) / lag_close` will show a ~-50% movement.
+   - In some sessions, the exchange provides an adjusted `prev_close` reflecting post-event base parity (`return_vs_prev_close`). Comparing `prev_close` with `lag_close` highlights discrepancies (`discrepancy_ratio > 0.05`). In other sessions (e.g. RELIANCE on 2024-10-28), the file retains yesterday's unadjusted close in `prev_close`. Analytical views flag both patterns for inspection without asserting causes.
 6. **Fault-Tolerant & Rate-Limit Resilient Backfills:**
    - Historical backfills must balance speed with ethics. On transient errors (network glitch, missing day archive), backfills record per-day failures and continue.
    - On rate limits (HTTP 403 or 429), continuing triggers retry storms and risks IP blacklisting. Halting immediately and marking remaining days as `not_attempted` protects infrastructure and guarantees predictable pipeline resumption.
@@ -179,8 +179,8 @@ A companion study guide for interviews, explaining the concepts, design rational
    *Answer:* `RANGE` filters by date offsets (e.g. `INTERVAL '20 days'`). Because stock markets are closed on weekends and holidays, a 20-calendar-day interval contains anywhere between 12 and 15 trading sessions, producing fluctuating sample sizes. `ROWS BETWEEN 19 PRECEDING AND CURRENT ROW` guarantees an exact 20-session sample depth.
 3. **Q: How do you handle insufficient history in rolling window calculations?**
    *Answer:* Standard SQL window functions will compute averages over whatever rows are available (e.g. Day 3 will average 3 rows). In financial indicators, this produces misleading values. We check `ROW_NUMBER()` or window count, returning `NULL` until the full window width (e.g. 20 or 50 rows) is satisfied: `CASE WHEN ROW_NUMBER() >= 20 THEN AVG(...) ELSE NULL END`.
-4. **Q: How do stock splits and bonus issues distort unadjusted financial time series?**
-   *Answer:* A 2:1 stock split doubles shares and halves the price. Calculating daily returns against the previous day's unadjusted close creates a fake -50% crash. In contrast, the exchange-adjusted `prev_close` column in official bhavcopies is adjusted downwards on the ex-date, preserving true return continuity.
+4. **Q: How do stock splits and bonus issues affect unadjusted financial time series?**
+   *Answer:* A 2:1 stock split doubles shares and halves the price. Calculating daily returns against the previous day's unadjusted close reflects a -50% drop. If the file's `prev_close` column is adjusted downwards to the new parity, calculating returns against `prev_close` reflects day-over-day trading performance. Unadjusted historical series require adjustment factors to produce seamless backwards-adjusted prices.
 5. **Q: Why halt a backfill on HTTP 403/429 instead of retrying or continuing?**
    *Answer:* HTTP 403 (Forbidden) and 429 (Too Many Requests) signal that the server's rate-limiting or anti-scraping defenses have engaged. Continuing to make dozens of subsequent requests will exacerbate the block and risk long-term IP banning. Halting immediately, logging the incident, and marking remaining days as `not_attempted` allows cooling off and resumption once the rate limit expires.
 

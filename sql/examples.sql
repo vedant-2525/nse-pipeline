@@ -99,15 +99,15 @@ WHERE trade_date = (SELECT MAX(trade_date) FROM gold.vw_sector_performance)
 ORDER BY avg_return_pct DESC;
 
 -- ------------------------------------------------------------------------------
--- Example 7: Suspected Corporate Actions Audit (Splits, Bonuses, Major Events)
--- Reveals symbols where exchange-adjusted prev_close diverges from yesterday's close.
+-- Example 7: Suspected Corporate Actions Audit
+-- Reveals symbols where file_prev_close diverges from previous loaded close or close moved >20%.
 -- ------------------------------------------------------------------------------
 SELECT
     symbol,
     company_name,
     trade_date,
-    unadjusted_yesterday_close,
-    exchange_adjusted_prev_close,
+    previous_loaded_close,
+    file_prev_close,
     current_close,
     discrepancy_ratio,
     return_vs_lag_pct,
